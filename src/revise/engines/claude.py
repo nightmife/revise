@@ -4,6 +4,7 @@ Claude renvoie les cartes au format JSON imposé par un schéma (sortie structur
 from __future__ import annotations
 
 import base64
+import os
 import json
 import math
 from dataclasses import dataclass
@@ -141,6 +142,10 @@ def _explain_api_error(e: Exception) -> ReviseError:
 
 
 def make_client() -> anthropic.Anthropic:
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if key and (key.endswith("...") or len(key) < 40):
+        raise ReviseError("ANTHROPIC_API_KEY contient un exemple, pas une vraie clé. Crée une clé sur "
+                          "console.anthropic.com → API Keys, puis : export ANTHROPIC_API_KEY='la clé copiée'")
     try:
         # Identifiants : ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN ou profil `ant auth login`.
         return anthropic.Anthropic(max_retries=3, timeout=900.0)
