@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -21,24 +20,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def has_claude_credentials() -> bool:
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-        return True
-    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "anthropic"
-    return cfg.is_dir() and any(cfg.iterdir())
-
-
 def pick_engine(name: str):
     from revise.engines.claude import ClaudeEngine
+    from revise.engines.claude_code import ClaudeCodeEngine, claude_binary
     from revise.engines.simple import SimpleEngine
 
     if name == "auto":
-        if has_claude_credentials():
-            return ClaudeEngine()
-        console.print("[yellow]Pas de clé API Claude trouvée : moteur sans IA.[/] "
-                      "(export ANTHROPIC_API_KEY=... pour des cartes bien meilleures)")
+        # On ne paie jamais sans l'avoir demandé : l'API facturée n'est utilisée qu'avec --moteur api.
+        if claude_binary():
+            return ClaudeCodeEngine()
+        console.print("[yellow]Claude Code introuvable : moteur sans IA.[/]")
         return SimpleEngine()
-    return ClaudeEngine() if name == "claude" else SimpleEngine()
+    return {"api": ClaudeEngine, "abonnement": ClaudeCodeEngine, "simple": SimpleEngine}[name]()
 
 
 # --------------------------------------------------------------- commandes ---
@@ -196,8 +189,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("importer", aliases=["import"], help="créer des cartes à partir de PDF")
     s.add_argument("pdf", nargs="+")
     s.add_argument("-m", "--matiere", help="matière (défaut : nom du dossier du PDF)")
-    s.add_argument("--moteur", choices=["auto", "claude", "simple"], default="auto",
-                   help="claude = API Claude (meilleur), simple = sans IA ; auto = claude si une clé est configurée")
+    s.add_argument("--moteur", choices=["auto", "abonnement", "api", "simple"], default="auto",
+                   help="abonnement = Claude Code avec ton abonnement (défaut si installé), "
+                        "api = API Claude facturée à l'usage, simple = sans IA")
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
     s.add_argument("--oui", action="store_true", help="ne pas demander de confirmation (coût)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")

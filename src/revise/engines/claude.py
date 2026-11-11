@@ -253,6 +253,11 @@ def parse_cards(message, chunk: PdfChunk) -> tuple[str, list[CardDraft]]:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         raise ReviseError(f"Réponse illisible de l'API sur les pages {chunk.first_page}-{chunk.last_page}.") from e
+    return cards_from_data(data, chunk)
+
+
+def cards_from_data(data: dict, chunk: PdfChunk) -> tuple[str, list[CardDraft]]:
+    """Convertit le JSON (schéma CARD_SCHEMA) en cartes, pages recalées sur le cours."""
     cards = []
     for raw in data.get("cards", []):
         page = raw.get("page")
