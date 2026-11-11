@@ -63,6 +63,12 @@ def cmd_import(db: Database, args) -> int:
             continue
         if args.titre and len(args.pdf) == 1:
             title = args.titre
+        else:
+            # Le nom du fichier (« CM8 - Pile et file ») est ce que l'étudiant reconnaît.
+            from revise.engines.simple import title_from_filename
+            named = title_from_filename(pdf.stem)
+            if len(named) >= 4 and any(ch.isalpha() for ch in named):
+                title = named
         if sha and (existing := db.find_deck_by_hash(sha)) and args.forcer:
             db.delete_deck(existing.id)
         deck_id = db.add_deck(subject, title, str(pdf.resolve()), sha, engine.name, cards)
@@ -103,9 +109,12 @@ def resolve_decks(db: Database, tokens: list[str] | None, subject: str | None) -
             if part.isdigit() and any(d.id == int(part) for d in decks):
                 matches = [d for d in decks if d.id == int(part)]
             else:
+                # On cherche dans le titre et dans le nom du PDF d'origine.
                 # « CM8 » ne doit pas attraper « CM80 » : on compare des mots entiers d'abord.
-                words = [d for d in decks if part.lower() in re.split(r"[\s\-–—:,()]+", d.title.lower())]
-                matches = words or [d for d in decks if part.lower() in d.title.lower()]
+                def names(d):
+                    return f"{d.title} {Path(d.source).stem if d.source else ''}".lower()
+                words = [d for d in decks if part.lower() in re.split(r"[\s\-–—:,()\[\]_.]+", names(d))]
+                matches = words or [d for d in decks if part.lower() in names(d)]
             if not matches:
                 raise ReviseError(f"aucun cours ne correspond à « {part} » (voir : revise liste)")
             ids += [d.id for d in matches if d.id not in ids]

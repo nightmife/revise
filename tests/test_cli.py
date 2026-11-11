@@ -33,9 +33,12 @@ def test_resolve_decks(tmp_path):
     db = Database(tmp_path / "y.db")
     ids = [db.add_deck("Algo", t, None, None, "simple", [CardDraft("qa", "Q", "R")])
            for t in ("CM8 - Pile et file", "CM80 - Autre", "CM9 - Arbre")]
+    ids.append(db.add_deck("Algo", "Les listes", "/dl/[LIFAPSD] CM7 - Liste.pdf", None, "abonnement",
+                           [CardDraft("qa", "Q", "R")]))
     assert cli.resolve_decks(db, ["CM8"], None) == [ids[0]]
     assert cli.resolve_decks(db, ["cm9,1"], None) == [ids[2], ids[0]]
     assert cli.resolve_decks(db, ["arbre"], None) == [ids[2]]
+    assert cli.resolve_decks(db, ["CM7"], None) == [ids[3]]  # trouvé par le nom du PDF
     import pytest
     from revise.models import ReviseError
     with pytest.raises(ReviseError):
