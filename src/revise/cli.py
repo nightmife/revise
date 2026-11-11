@@ -14,7 +14,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from revise import __version__, editfmt
-from revise.db import Database, file_sha256
+from revise.db import Database
 from revise.models import ReviseError
 
 console = Console()
@@ -39,17 +39,13 @@ def pick_engine(name: str):
 
 def cmd_import(db: Database, args) -> int:
     from revise.engines.claude import ClaudeEngine, format_estimate
+    from revise.importer import guess_subject, import_pdf
 
     engine = pick_engine(args.moteur)
     total = 0
     for raw in args.pdf:
         pdf = Path(raw).expanduser()
-        subject = args.matiere or pdf.resolve().parent.name
-        sha = file_sha256(pdf) if pdf.is_file() else None
-        if sha and (existing := db.find_deck_by_hash(sha)) and not args.forcer:
-            console.print(f"[yellow]{pdf.name} déjà importé[/] (paquet {existing.id}, {existing.subject}). "
-                          "--forcer pour réimporter.")
-            continue
+        subject = args.matiere or guess_subject(pdf)
         if isinstance(engine, ClaudeEngine) and not args.oui:
             with console.status(f"Estimation du coût pour {pdf.name}…"):
                 est = engine.estimate(pdf, subject)
@@ -57,29 +53,19 @@ def cmd_import(db: Database, args) -> int:
             if not Confirm.ask("Générer les cartes ?", default=True):
                 continue
         with console.status(f"{pdf.name}…") as status:
-            title, cards = engine.generate(pdf, subject, lambda m: status.update(f"{pdf.name} : {m}"))
-        if not cards:
-            console.print(f"[red]Aucune carte trouvée dans {pdf.name}.[/]")
+            res = import_pdf(db, engine, pdf, subject, lambda m: status.update(f"{pdf.name} : {m}"),
+                             title=args.titre if len(args.pdf) == 1 else None, force=args.forcer)
+        if res.skipped:
+            console.print(f"[yellow]{pdf.name} déjà importé[/] (paquet {res.deck_id}). --forcer pour réimporter.")
             continue
-        if args.titre and len(args.pdf) == 1:
-            title = args.titre
-        else:
-            # Le nom du fichier (« CM8 - Pile et file ») est ce que l'étudiant reconnaît.
-            from revise.engines.simple import title_from_filename
-            named = title_from_filename(pdf.stem)
-            if len(named) >= 4 and any(ch.isalpha() for ch in named):
-                title = named
-        if sha and (existing := db.find_deck_by_hash(sha)) and args.forcer:
-            db.delete_deck(existing.id)
-        deck_id = db.add_deck(subject, title, str(pdf.resolve()), sha, engine.name, cards)
-        total += len(cards)
-        console.print(f"[green]✓[/] {pdf.name} → paquet {deck_id} « {title} » ({subject}) : "
-                      f"[bold]{len(cards)} cartes[/]")
-        for c in cards[:3]:
+        total += len(res.cards)
+        console.print(f"[green]✓[/] {pdf.name} → paquet {res.deck_id} « {res.title} » ({subject}) : "
+                      f"[bold]{len(res.cards)} cartes[/]")
+        for c in res.cards[:3]:
             console.print(Panel(Markdown(f"{c.question}\n\n---\n\n{c.answer}"), title=f"exemple · p. {c.page or '?'}",
                                 title_align="left", border_style="grey50", expand=False, width=90))
     if total:
-        console.print(f"\nC'est parti : [bold]revise reviser[/]  (ou [bold]revise editer N[/] pour retoucher les cartes)")
+        console.print("\nC'est parti : [bold]revise reviser[/]  (ou [bold]revise editer N[/] pour retoucher les cartes)")
     return 0
 
 
@@ -135,6 +121,34 @@ def cmd_review(db: Database, args) -> int:
         console.print(f"Cours : {titles}")
     done = tui.run(db, args.matiere, args.nouvelles, deck_ids, getattr(args, "examen", False))
     console.print(f"{done} carte(s) révisée(s).")
+    return 0
+
+
+def has_display() -> bool:
+    import os
+    return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
+
+
+def cmd_app(db: Database, args) -> int:
+    try:
+        from revise.gui.app import main as gui_main
+    except ImportError as e:
+        raise ReviseError(f"Interface graphique indisponible ({e}). Installe : .venv/bin/pip install PySide6-Essentials")
+    return gui_main(db)
+
+
+def cmd_shortcut(db: Database, args) -> int:
+    import os
+    import shutil
+    exe = shutil.which("revise") or sys.argv[0]
+    apps = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    desktop = apps / "revise.desktop"
+    desktop.write_text(
+        "[Desktop Entry]\nType=Application\nName=revise\nComment=Réviser ses CM en cartes (répétition espacée)\n"
+        f"Exec={Path(exe).resolve()} app\nIcon=accessories-dictionary\nTerminal=false\n"
+        "Categories=Education;\n", encoding="utf-8")
+    console.print(f"[green]✓[/] Raccourci créé : {desktop}")
     return 0
 
 
@@ -221,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="revise", description="Révision espacée (FSRS) à partir de tes CM en PDF.")
     p.add_argument("--version", action="version", version=f"revise {__version__}")
     p.add_argument("--base", type=Path, help="fichier de base de données (défaut : ~/.local/share/revise/revise.db)")
+    p.set_defaults(cours=None, examen=False)
     sub = p.add_subparsers(dest="cmd")
 
     s = sub.add_parser("importer", aliases=["import"], help="créer des cartes à partir de PDF")
@@ -247,6 +262,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-e", "--examen", action="store_true",
                    help="bachotage : toutes les cartes tout de suite, jusqu'à les savoir toutes")
     s.set_defaults(func=cmd_review)
+
+    s = sub.add_parser("app", help="ouvrir l'application graphique (par défaut si on tape juste « revise »)")
+    s.set_defaults(func=cmd_app)
+
+    s = sub.add_parser("raccourci", help="ajouter revise au menu des applications")
+    s.set_defaults(func=cmd_shortcut)
 
     s = sub.add_parser("stats", help="statistiques et régularité")
     s.set_defaults(func=cmd_stats)
@@ -276,6 +297,8 @@ def main(argv: list[str] | None = None) -> int:
     db = Database(args.base) if args.base else Database()
     try:
         if not args.cmd:
+            if has_display():
+                return cmd_app(db, args)
             if db.subjects():
                 args.matiere, args.nouvelles, args.cours, args.examen = None, 20, None, False
                 return cmd_review(db, args)

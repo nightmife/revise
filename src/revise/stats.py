@@ -43,15 +43,8 @@ def streak(days: set[date], today: date) -> int:
     return s
 
 
-def subject_table(db: Database, now: datetime) -> Table:
-    t = Table(title="Matières", title_justify="left", header_style="bold", expand=False)
-    t.add_column("Matière")
-    t.add_column("Cours", justify="right")
-    t.add_column("Cartes", justify="right")
-    t.add_column("Nouvelles", justify="right")
-    t.add_column("À réviser", justify="right")
-    t.add_column("Apprises", justify="right")
-    t.add_column("Solides (≥ 21 j)", justify="right")
+def subject_rows(db: Database, now: datetime) -> list[dict]:
+    rows = []
     for subj in db.subjects():
         cards = db.cards(subject=subj, include_suspended=False)
         new = sum(1 for c in cards if c.fsrs is None)
@@ -65,15 +58,54 @@ def subject_table(db: Database, now: datetime) -> Table:
                 learned += 1
                 if (st.stability or 0) >= 21:
                     solid += 1
-        t.add_row(subj, str(len(db.decks(subj))), str(len(cards)), str(new),
-                  f"[bold]{due}[/]" if due else "0", str(learned), str(solid))
+        rows.append({"subject": subj, "decks": len(db.decks(subj)), "cards": len(cards), "new": new,
+                     "due": due, "learned": learned, "solid": solid})
+    return rows
+
+
+def subject_table(db: Database, now: datetime) -> Table:
+    t = Table(title="Matières", title_justify="left", header_style="bold", expand=False)
+    for col in ("Matière", "Cours", "Cartes", "Nouvelles", "À réviser", "Apprises", "Solides (≥ 21 j)"):
+        t.add_column(col, justify="left" if col == "Matière" else "right")
+    for r in subject_rows(db, now):
+        t.add_row(r["subject"], str(r["decks"]), str(r["cards"]), str(r["new"]),
+                  f"[bold]{r['due']}[/]" if r["due"] else "0", str(r["learned"]), str(r["solid"]))
     return t
 
 
-def heatmap(db: Database, today: date, weeks: int = 26) -> Group:
+def daily_counts(db: Database, today: date, weeks: int = 26) -> tuple[date, Counter]:
+    """Premier lundi affiché et nombre de révisions par jour local."""
     start = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
     since = datetime.combine(start, datetime.min.time()).astimezone()
-    counts = Counter(local_day(r["ts"]) for r in db.reviews_since(since))
+    return start, Counter(local_day(r["ts"]) for r in db.reviews_since(since))
+
+
+def forecast_counts(db: Database, today: date, days: int = 14) -> list[tuple[date, int]]:
+    counts: Counter[date] = Counter()
+    for c in db.cards(include_suspended=False):
+        if c.fsrs is None:
+            continue
+        d = max(local_day(c.due), today)  # les cartes en retard comptent pour aujourd'hui
+        if d < today + timedelta(days=days):
+            counts[d] += 1
+    return [(today + timedelta(days=i), counts.get(today + timedelta(days=i), 0)) for i in range(days)]
+
+
+def summary_data(db: Database, now: datetime) -> dict:
+    today = now.astimezone().date()
+    reviews = db.reviews_since(now - timedelta(days=400))
+    days = {local_day(r["ts"]) for r in reviews}
+    today_reviews = [r for r in reviews if local_day(r["ts"]) == today]
+    month = [r for r in reviews
+             if parse_iso(r["ts"]) >= now - timedelta(days=30) and r["state_before"] == int(State.Review)]
+    ok = sum(1 for r in month if r["rating"] > 1)
+    return {"streak": streak(days, today), "today": len(today_reviews),
+            "minutes": sum((r["duration_ms"] or 0) for r in today_reviews) / 60000,
+            "retention": (ok / len(month)) if month else None, "retention_n": len(month)}
+
+
+def heatmap(db: Database, today: date, weeks: int = 26) -> Group:
+    start, counts = daily_counts(db, today, weeks)
     peak = max(counts.values(), default=0)
     lines = []
     cols = [" "] * (weeks * 2 + 4)
@@ -110,13 +142,8 @@ def heatmap(db: Database, today: date, weeks: int = 26) -> Group:
 
 
 def forecast(db: Database, today: date, days: int = 14) -> Table:
-    counts: Counter[date] = Counter()
-    for c in db.cards(include_suspended=False):
-        if c.fsrs is None:
-            continue
-        d = max(local_day(c.due), today)  # les cartes en retard comptent pour aujourd'hui
-        if d < today + timedelta(days=days):
-            counts[d] += 1
+    data = forecast_counts(db, today, days)
+    counts = dict(data)
     peak = max(counts.values(), default=0)
     t = Table(title="Cartes à réviser les 14 prochains jours", title_justify="left", show_header=False,
               box=None, padding=(0, 1))
@@ -134,22 +161,16 @@ def forecast(db: Database, today: date, days: int = 14) -> Table:
 
 
 def summary(db: Database, now: datetime) -> Text:
-    today = now.astimezone().date()
-    reviews = db.reviews_since(now - timedelta(days=400))
-    days = {local_day(r["ts"]) for r in reviews}
-    today_reviews = [r for r in reviews if local_day(r["ts"]) == today]
-    minutes = sum((r["duration_ms"] or 0) for r in today_reviews) / 60000
-    month = [r for r in reviews if parse_iso(r["ts"]) >= now - timedelta(days=30) and r["state_before"] == int(State.Review)]
+    d = summary_data(db, now)
     t = Text()
     t.append("Série : ", style=MUTED)
-    t.append(f"{streak(days, today)} jour(s)", style="bold")
+    t.append(f"{d['streak']} jour(s)", style="bold")
     t.append("   Aujourd'hui : ", style=MUTED)
-    t.append(f"{len(today_reviews)} cartes en {minutes:.0f} min", style="bold")
+    t.append(f"{d['today']} cartes en {d['minutes']:.0f} min", style="bold")
     t.append("   Rétention (30 j) : ", style=MUTED)
-    if month:
-        ok = sum(1 for r in month if r["rating"] > 1)
-        t.append(f"{100 * ok / len(month):.0f} %", style="bold")
-        t.append(f" sur {len(month)} rappels", style=MUTED)
+    if d["retention"] is not None:
+        t.append(f"{100 * d['retention']:.0f} %", style="bold")
+        t.append(f" sur {d['retention_n']} rappels", style=MUTED)
     else:
         t.append("pas encore de données", style=MUTED)
     return t

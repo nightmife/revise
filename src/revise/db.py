@@ -104,6 +104,16 @@ class Card:
         return self.fsrs is None
 
 
+def deck_label(d: Deck) -> str:
+    """Nom affiché d'un cours : celui du fichier PDF (« CM8 - Pile et file ») s'il existe."""
+    if d.source:
+        from revise.engines.simple import title_from_filename
+        name = title_from_filename(Path(d.source).stem)
+        if len(name) >= 4 and any(ch.isalpha() for ch in name):
+            return name
+    return d.title
+
+
 class Database:
     def __init__(self, path: Path | None = None):
         self.path = path or default_path()
@@ -237,6 +247,17 @@ class Database:
                " WHERE r.state_before = 0 AND r.ts >= ?" + scope)
         args: list = [iso(since), *sargs]
         return int(self.conn.execute(sql, args).fetchone()[0])
+
+    def last_ratings(self) -> dict[int, int]:
+        """Note de la dernière révision de chaque carte."""
+        rows = self.conn.execute(
+            "SELECT r.card_id, r.rating FROM reviews r"
+            " JOIN (SELECT card_id, MAX(id) AS mid FROM reviews GROUP BY card_id) l ON l.mid = r.id")
+        return {int(a): int(b) for a, b in rows}
+
+    def rename_deck(self, deck_id: int, title: str, subject: str) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE decks SET title = ?, subject = ? WHERE id = ?", (title, subject, deck_id))
 
     def reviews_since(self, since: datetime) -> list[sqlite3.Row]:
         return list(self.conn.execute("SELECT * FROM reviews WHERE ts >= ? ORDER BY ts", (iso(since),)))

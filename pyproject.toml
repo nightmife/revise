@@ -13,6 +13,7 @@ dependencies = [
     "textual>=1.0",
     "rich>=13",
     "fsrs>=6.3,<7",
+    "PySide6-Essentials>=6.6",
 ]
 
 [project.optional-dependencies]

@@ -12,6 +12,7 @@ from revise.db import Card, Database, parse_iso, utcnow
 
 RATING_LABELS = {Rating.Again: "À revoir", Rating.Hard: "Difficile", Rating.Good: "Bien", Rating.Easy: "Facile"}
 LEARN_AHEAD = timedelta(minutes=20)  # une carte en apprentissage due dans moins de 20 min reste dans la séance
+KNOWN_RETRIEVABILITY = 0.85          # mode examen : carte « sue » si dernière note ≥ Bien et rappel probable
 
 
 def make_scheduler() -> Scheduler:
@@ -94,7 +95,9 @@ class Session:
     new_per_day: int = 20
     deck_ids: list[int] | None = None
     cram: bool = False
+    include_known: bool = False
     scheduler: Scheduler = field(default_factory=make_scheduler)
+    known_skipped: int = 0
     queue: list[Card] = field(default_factory=list)
     done: int = 0
     new_seen: int = 0
@@ -103,7 +106,20 @@ class Session:
     def __post_init__(self) -> None:
         now = utcnow()
         if self.cram:
-            self.queue = self.db.cards(subject=self.subject, deck_ids=self.deck_ids, include_suspended=False)
+            cards = self.db.cards(subject=self.subject, deck_ids=self.deck_ids, include_suspended=False)
+            if not self.include_known:
+                # Les cartes déjà sues (dernière note Bien/Facile, encore fraîches en mémoire) ne repassent pas :
+                # on peut quitter et reprendre le bachotage sans tout refaire.
+                last = self.db.last_ratings()
+                kept = []
+                for c in cards:
+                    if (c.fsrs is not None and last.get(c.id, 0) >= int(Rating.Good)
+                            and self.scheduler.get_card_retrievability(load_state(c), now) >= KNOWN_RETRIEVABILITY):
+                        self.known_skipped += 1
+                    else:
+                        kept.append(c)
+                cards = kept
+            self.queue = cards
             return
         due = self.db.due_cards(now + LEARN_AHEAD, self.subject, self.deck_ids)
         already = self.db.new_introduced_since(start_of_day(now), self.subject, self.deck_ids)

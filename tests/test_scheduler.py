@@ -97,3 +97,15 @@ def test_deck_filter_and_cram_mode(db):
     assert s.done == 5
     assert all(c.fsrs is not None for c in db.cards(deck_id=b))
     assert all(c.fsrs is None for c in db.cards(deck_id=a))
+
+
+def test_cram_skips_known_cards_on_restart(db):
+    d = setup(db, 4)
+    s = Session(db, deck_ids=[d], cram=True)
+    s.answer(s.current(), Rating.Good)
+    s.answer(s.current(), Rating.Again)
+    # On quitte et on relance : la carte sue ne revient pas, la ratée oui
+    s2 = Session(db, deck_ids=[d], cram=True)
+    assert s2.remaining == 3 and s2.known_skipped == 1
+    s3 = Session(db, deck_ids=[d], cram=True, include_known=True)
+    assert s3.remaining == 4

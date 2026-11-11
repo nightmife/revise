@@ -26,18 +26,28 @@ Il ne transmet jamais `ANTHROPIC_API_KEY` : rien n'est facturé en dehors de l'a
 ## Utilisation
 
 ```bash
-revise importer ~/Downloads/*CM*.pdf -m LIFAPSD   # génère les cartes (moteur abonnement)
-revise importer cours.pdf --moteur simple         # sans IA, gratuit
-revise                                            # séance de révision (= revise reviser)
-revise reviser -m LIFAPSD -n 30                   # une matière, 30 nouvelles cartes/jour max
-revise stats                                      # régularité, prévisions, rétention
-revise liste                                      # paquets importés
-revise editer 3                                   # retoucher les cartes du paquet 3 dans $EDITOR
-revise estimer cours.pdf                          # coût d'un import avec --moteur api
+revise              # ouvre l'application
+revise raccourci    # ajoute « revise » au menu des applications
 ```
 
-Pendant la révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien,
-`4` facile, `e` modifier la carte, `s` la suspendre, `q` quitter.
+Dans l'application :
+- **Importer** : coche les PDF (Téléchargements/Documents listés automatiquement, ou glisser-déposer),
+  choisis le moteur, « Importer la sélection ».
+- **Mes cours** : coche un ou plusieurs CM puis
+  - **Réviser** : planning de répétition espacée (cartes dues + nouvelles du jour) ;
+  - **Mode examen** : toutes les cartes tout de suite, jusqu'à les savoir toutes ; les cartes déjà
+    sues sont sautées (on peut quitter et reprendre).
+- Révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien, `4` facile,
+  `E` modifier, `S` suspendre, `Échap` terminer.
+- **Statistiques** : série, rétention, régularité, prévisions.
+
+En ligne de commande (sans interface) :
+
+```bash
+revise importer ~/Downloads/*CM*.pdf -m LIFAPSD
+revise reviser --cours CM7 CM8 --examen
+revise stats
+```
 
 Données : `~/.local/share/revise/revise.db` (SQLite).
 
