@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -88,6 +89,29 @@ def cmd_estimate(db: Database, args) -> int:
     return 0
 
 
+def resolve_decks(db: Database, tokens: list[str] | None, subject: str | None) -> list[int] | None:
+    """`--cours 3 8 CM9` : numéros de paquet ou morceaux de titre (« CM8 », « pile »)."""
+    if not tokens:
+        return None
+    decks = db.decks(subject)
+    ids: list[int] = []
+    for tok in tokens:
+        for part in tok.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if part.isdigit() and any(d.id == int(part) for d in decks):
+                matches = [d for d in decks if d.id == int(part)]
+            else:
+                # « CM8 » ne doit pas attraper « CM80 » : on compare des mots entiers d'abord.
+                words = [d for d in decks if part.lower() in re.split(r"[\s\-–—:,()]+", d.title.lower())]
+                matches = words or [d for d in decks if part.lower() in d.title.lower()]
+            if not matches:
+                raise ReviseError(f"aucun cours ne correspond à « {part} » (voir : revise liste)")
+            ids += [d.id for d in matches if d.id not in ids]
+    return ids
+
+
 def cmd_review(db: Database, args) -> int:
     from revise import tui
 
@@ -96,7 +120,11 @@ def cmd_review(db: Database, args) -> int:
         return 1
     if args.matiere and args.matiere.lower() not in {s.lower() for s in db.subjects()}:
         raise ReviseError(f"matière inconnue « {args.matiere} » (connues : {', '.join(db.subjects())})")
-    done = tui.run(db, args.matiere, args.nouvelles)
+    deck_ids = resolve_decks(db, getattr(args, "cours", None), args.matiere)
+    if deck_ids:
+        titles = ", ".join(d.title for d in db.decks() if d.id in deck_ids)
+        console.print(f"Cours : {titles}")
+    done = tui.run(db, args.matiere, args.nouvelles, deck_ids, getattr(args, "examen", False))
     console.print(f"{done} carte(s) révisée(s).")
     return 0
 
@@ -205,6 +233,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("reviser", aliases=["r"], help="lancer une séance de révision")
     s.add_argument("-m", "--matiere")
     s.add_argument("-n", "--nouvelles", type=int, default=20, help="nouvelles cartes max par jour (défaut 20)")
+    s.add_argument("-c", "--cours", nargs="+", metavar="COURS",
+                   help="seulement ces cours : numéros (revise liste) ou morceaux de titre, ex. --cours CM8 CM9")
+    s.add_argument("-e", "--examen", action="store_true",
+                   help="bachotage : toutes les cartes tout de suite, jusqu'à les savoir toutes")
     s.set_defaults(func=cmd_review)
 
     s = sub.add_parser("stats", help="statistiques et régularité")
@@ -236,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.cmd:
             if db.subjects():
-                args.matiere, args.nouvelles = None, 20
+                args.matiere, args.nouvelles, args.cours, args.examen = None, 20, None, False
                 return cmd_review(db, args)
             parser.print_help()
             return 0

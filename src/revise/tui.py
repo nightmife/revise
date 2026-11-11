@@ -63,10 +63,13 @@ class ReviewApp(App):
         Binding("q", "quit", "Quitter"),
     ]
 
-    def __init__(self, db: Database, subject: str | None, new_per_day: int):
+    def __init__(self, db: Database, subject: str | None, new_per_day: int, deck_ids: list[int] | None = None,
+                 cram: bool = False):
         super().__init__()
         self.db = db
-        self.session = Session(db, subject, new_per_day)
+        self.cram = cram
+        self.session = Session(db, subject, new_per_day, deck_ids=deck_ids, cram=cram)
+        self.total = self.session.remaining
         self.card = None
         self.revealed = False
         self.shown_at = 0.0
@@ -91,6 +94,12 @@ class ReviewApp(App):
     # ---------------------------------------------------------------- affichage
     def update_counts(self) -> None:
         new, learning, review = self.session.counts()
+        if self.cram:
+            known = self.total - self.session.remaining
+            self.query_one("#counts", Static).update(
+                f"[b]MODE EXAMEN[/]   [#0ca30c]{known}/{self.total} sues[/]   [#86b6ef]{new} jamais vues[/]   "
+                f"[#fab219]{learning} à revoir[/]   [#a8a69e]{review} déjà vues · {self.session.done} réponses[/]")
+            return
         self.query_one("#counts", Static).update(
             f"[#86b6ef]{new} nouvelles[/]   [#fab219]{learning} en apprentissage[/]   "
             f"[#0ca30c]{review} à réviser[/]   [#a8a69e]· {self.session.done} faites[/]")
@@ -170,7 +179,11 @@ class ReviewApp(App):
         self.query_one("#kind", Static).update("")
         self.query_one("#answer").display = False
         self.query_one("#sep").display = False
-        if self.session.done:
+        if self.cram and self.session.done:
+            msg = (f"## Tout est su !\n\nLes {self.total} cartes ont été notées « Bien » ou « Facile » "
+                   f"({self.session.done} réponses en {minutes:.0f} min). Bon courage pour le contrôle !\n\n"
+                   "Relance `revise reviser --examen …` juste avant pour une dernière passe.")
+        elif self.session.done:
             msg = (f"## Séance terminée\n\n{self.session.done} cartes révisées en {minutes:.0f} min, "
                    f"dont {self.session.new_seen} nouvelles.\n\nReviens demain : `revise stats` pour voir la suite.")
         else:
@@ -180,7 +193,8 @@ class ReviewApp(App):
         self.update_counts()
 
 
-def run(db: Database, subject: str | None, new_per_day: int) -> int:
-    app = ReviewApp(db, subject, new_per_day)
+def run(db: Database, subject: str | None, new_per_day: int, deck_ids: list[int] | None = None,
+        cram: bool = False) -> int:
+    app = ReviewApp(db, subject, new_per_day, deck_ids, cram)
     app.run()
     return app.session.done

@@ -164,15 +164,24 @@ class Database:
         return [r[0] for r in self.conn.execute("SELECT DISTINCT subject FROM decks ORDER BY subject COLLATE NOCASE")]
 
     # ----------------------------------------------------------------- cartes
-    def cards(self, deck_id: int | None = None, subject: str | None = None, include_suspended: bool = True) -> list[Card]:
-        sql = "SELECT c.* FROM cards c JOIN decks d ON d.id = c.deck_id WHERE 1=1"
-        args: list = []
-        if deck_id is not None:
-            sql += " AND c.deck_id = ?"
-            args.append(deck_id)
+    @staticmethod
+    def _scope(subject: str | None, deck_ids: list[int] | None) -> tuple[str, list]:
+        sql, args = "", []
         if subject:
             sql += " AND d.subject = ? COLLATE NOCASE"
             args.append(subject)
+        if deck_ids is not None:
+            ids = [int(x) for x in deck_ids] or [-1]
+            sql += f" AND c.deck_id IN ({','.join('?' * len(ids))})"
+            args += ids
+        return sql, args
+
+    def cards(self, deck_id: int | None = None, subject: str | None = None, include_suspended: bool = True,
+              deck_ids: list[int] | None = None) -> list[Card]:
+        if deck_id is not None:
+            deck_ids = [deck_id]
+        scope, args = self._scope(subject, deck_ids)
+        sql = "SELECT c.* FROM cards c JOIN decks d ON d.id = c.deck_id WHERE 1=1" + scope
         if not include_suspended:
             sql += " AND c.suspended = 0"
         sql += " ORDER BY c.deck_id, c.page IS NULL, c.page, c.id"
@@ -203,37 +212,30 @@ class Database:
                 "INSERT INTO reviews(card_id, ts, rating, duration_ms, state_before) VALUES (?,?,?,?,?)",
                 (card_id, iso(ts), rating, duration_ms, state_before))
 
-    def due_cards(self, now: datetime, subject: str | None = None) -> list[Card]:
+    def due_cards(self, now: datetime, subject: str | None = None, deck_ids: list[int] | None = None) -> list[Card]:
         """Cartes déjà vues dont l'échéance est passée."""
+        scope, sargs = self._scope(subject, deck_ids)
         sql = ("SELECT c.* FROM cards c JOIN decks d ON d.id = c.deck_id"
-               " WHERE c.suspended = 0 AND c.fsrs IS NOT NULL AND c.due <= ?")
-        args: list = [iso(now)]
-        if subject:
-            sql += " AND d.subject = ? COLLATE NOCASE"
-            args.append(subject)
-        sql += " ORDER BY c.due"
+               " WHERE c.suspended = 0 AND c.fsrs IS NOT NULL AND c.due <= ?" + scope + " ORDER BY c.due")
+        args: list = [iso(now), *sargs]
         return [self._card(r) for r in self.conn.execute(sql, args)]
 
-    def new_cards(self, limit: int, subject: str | None = None) -> list[Card]:
+    def new_cards(self, limit: int, subject: str | None = None, deck_ids: list[int] | None = None) -> list[Card]:
         """Nouvelles cartes, dans l'ordre du cours (paquet puis page)."""
+        scope, sargs = self._scope(subject, deck_ids)
         sql = ("SELECT c.* FROM cards c JOIN decks d ON d.id = c.deck_id"
-               " WHERE c.suspended = 0 AND c.fsrs IS NULL")
-        args: list = []
-        if subject:
-            sql += " AND d.subject = ? COLLATE NOCASE"
-            args.append(subject)
-        sql += " ORDER BY c.deck_id, c.page IS NULL, c.page, c.id LIMIT ?"
-        args.append(max(0, limit))
+               " WHERE c.suspended = 0 AND c.fsrs IS NULL" + scope +
+               " ORDER BY c.deck_id, c.page IS NULL, c.page, c.id LIMIT ?")
+        args: list = [*sargs, max(0, limit)]
         return [self._card(r) for r in self.conn.execute(sql, args)]
 
-    def new_introduced_since(self, since: datetime, subject: str | None = None) -> int:
+    def new_introduced_since(self, since: datetime, subject: str | None = None,
+                             deck_ids: list[int] | None = None) -> int:
         """Nombre de cartes vues pour la première fois depuis `since`."""
+        scope, sargs = self._scope(subject, deck_ids)
         sql = ("SELECT COUNT(*) FROM reviews r JOIN cards c ON c.id = r.card_id JOIN decks d ON d.id = c.deck_id"
-               " WHERE r.state_before = 0 AND r.ts >= ?")
-        args: list = [iso(since)]
-        if subject:
-            sql += " AND d.subject = ? COLLATE NOCASE"
-            args.append(subject)
+               " WHERE r.state_before = 0 AND r.ts >= ?" + scope)
+        args: list = [iso(since), *sargs]
         return int(self.conn.execute(sql, args).fetchone()[0])
 
     def reviews_since(self, since: datetime) -> list[sqlite3.Row]:

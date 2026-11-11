@@ -79,23 +79,36 @@ def start_of_day(now: datetime) -> datetime:
 
 @dataclass
 class Session:
-    """File d'une séance : cartes dues d'abord, puis nouvelles cartes (dans la limite du jour).
-    Les cartes ratées ou en apprentissage reviennent tant qu'elles sont dues dans la séance."""
+    """File d'une séance.
+
+    Mode normal : cartes dues d'abord, puis nouvelles cartes (dans la limite du jour) ;
+    les cartes ratées ou en apprentissage reviennent tant qu'elles sont dues dans la séance.
+
+    Mode examen (`cram`) : toutes les cartes des cours choisis, dans l'ordre du cours, sans
+    limite ni échéance ; une carte notée « À revoir » ou « Difficile » repasse en fin de file,
+    jusqu'à ce que chacune ait été notée « Bien » ou « Facile ». Les réponses sont enregistrées
+    normalement : FSRS en tient compte pour la suite."""
 
     db: Database
     subject: str | None = None
     new_per_day: int = 20
+    deck_ids: list[int] | None = None
+    cram: bool = False
     scheduler: Scheduler = field(default_factory=make_scheduler)
     queue: list[Card] = field(default_factory=list)
     done: int = 0
     new_seen: int = 0
+    to_retry: set[int] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         now = utcnow()
-        due = self.db.due_cards(now + LEARN_AHEAD, self.subject)
-        already = self.db.new_introduced_since(start_of_day(now), self.subject)
+        if self.cram:
+            self.queue = self.db.cards(subject=self.subject, deck_ids=self.deck_ids, include_suspended=False)
+            return
+        due = self.db.due_cards(now + LEARN_AHEAD, self.subject, self.deck_ids)
+        already = self.db.new_introduced_since(start_of_day(now), self.subject, self.deck_ids)
         quota = max(0, self.new_per_day - already)
-        new = self.db.new_cards(quota, self.subject)
+        new = self.db.new_cards(quota, self.subject, self.deck_ids)
         self.queue = due + new
 
     @property
@@ -103,11 +116,18 @@ class Session:
         return len(self.queue)
 
     def counts(self) -> tuple[int, int, int]:
-        """(nouvelles, en apprentissage, à réviser) restantes."""
+        """Normal : (nouvelles, en apprentissage, à réviser). Examen : (jamais vues, à revoir, déjà vues)."""
         new = learning = review = 0
         for c in self.queue:
             code = state_code(c)
-            if code == 0:
+            if self.cram:
+                if c.id in self.to_retry:
+                    learning += 1
+                elif code == 0:
+                    new += 1
+                else:
+                    review += 1
+            elif code == 0:
                 new += 1
             elif code == int(State.Review):
                 review += 1
@@ -116,6 +136,8 @@ class Session:
         return new, learning, review
 
     def current(self, now: datetime | None = None) -> Card | None:
+        if self.cram:
+            return self.queue[0] if self.queue else None
         now = now or utcnow()
         # Priorité aux cartes dues ; les nouvelles (échéance = date de création) passent après.
         ready = [c for c in self.queue if parse_iso(c.due) <= now + LEARN_AHEAD]
@@ -138,7 +160,13 @@ class Session:
         self.done += 1
         if was_new:
             self.new_seen += 1
-        if parse_iso(updated.due) <= now + LEARN_AHEAD:
+        if self.cram:
+            if rating in (Rating.Again, Rating.Hard):
+                self.to_retry.add(card.id)
+                self.queue.append(updated)
+            else:
+                self.to_retry.discard(card.id)
+        elif parse_iso(updated.due) <= now + LEARN_AHEAD:
             self.queue.append(updated)
         return updated
 

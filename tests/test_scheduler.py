@@ -78,3 +78,22 @@ def test_start_of_day_before_and_after_4am():
     early = datetime(2026, 11, 12, 2, 0, tzinfo=tz)
     assert start_of_day(late) == start_of_day(early)
     assert start_of_day(late).tzinfo == timezone.utc
+
+
+def test_deck_filter_and_cram_mode(db):
+    a = setup(db, 3, "Algo")
+    b = setup(db, 4, "Algo")
+    s = Session(db, new_per_day=2, deck_ids=[b])
+    assert s.remaining == 2 and all(c.deck_id == b for c in s.queue)
+    # Mode examen : tout le paquet, sans limite, jusqu'à « Bien » partout
+    s = Session(db, deck_ids=[b], cram=True)
+    assert s.remaining == 4
+    first = s.current()
+    s.answer(first, Rating.Again)
+    assert s.remaining == 4 and s.queue[-1].id == first.id  # repasse en fin de file
+    assert s.counts()[1] == 1
+    while (c := s.current()) is not None:
+        s.answer(c, Rating.Good)
+    assert s.done == 5
+    assert all(c.fsrs is not None for c in db.cards(deck_id=b))
+    assert all(c.fsrs is None for c in db.cards(deck_id=a))
