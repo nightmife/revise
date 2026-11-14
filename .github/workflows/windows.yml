@@ -37,6 +37,8 @@ jobs:
       - name: Publication
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
-        run: gh release create "$GITHUB_REF_NAME" dist/revise.exe --title "revise $GITHUB_REF_NAME" --notes "Télécharge revise.exe et lance-le. Au premier lancement, Windows affiche « éditeur inconnu » : clique sur « Informations complémentaires » puis « Exécuter quand même »."
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/revise.exe --title "revise $GITHUB_REF_NAME" \
+            --notes "Télécharge revise.exe et lance-le. Au premier lancement, Windows affiche « éditeur inconnu » : clique sur « Informations complémentaires » puis « Exécuter quand même »."
         env:
           GH_TOKEN: ${{ github.token }}
