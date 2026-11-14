@@ -2,16 +2,55 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSpinBox,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from revise.db import Card, Database, deck_label
+from revise.engines import distractors
 from revise.gui import theme
-from revise.gui.common import cloze_question, fill_scope_combo, muted, page_header, row
+from revise.gui.common import cloze_question, confirm, fill_scope_combo, muted, page_header, row, select_scope
 from revise.gui.review import markdown_view
-from revise.quiz import QuizQuestion, build_quiz, usable_count
+from revise.models import ReviseError
+from revise.quiz import QuizQuestion, build_quiz, prepared_count, usable_count
+
+
+class PrepareWorker(QObject):
+    """Fait écrire par l'IA, dans un thread, les mauvaises réponses des cartes qui n'en ont pas."""
+
+    status = Signal(str)
+    done = Signal(int, str)  # cartes complétées, message d'erreur éventuel
+
+    def __init__(self, db_path: Path, deck_ids: list[int]):
+        super().__init__()
+        self.db_path, self.deck_ids = db_path, deck_ids
+        self.cancelled = False
+        self.engine = None
+
+    def run(self) -> None:
+        db = Database(self.db_path)
+        before = prepared_count(db.cards(deck_ids=self.deck_ids))
+        error = ""
+        try:
+            self.engine = distractors.default_engine()
+            getattr(self.engine, "check", lambda: None)()
+            self.engine.progress = self.status.emit
+            distractors.prepare(db, self.deck_ids, self.engine.chat, self.status.emit, lambda: self.cancelled)
+        except ReviseError as e:
+            error = str(e)
+        except Exception as e:  # une panne de l'IA ne doit pas fermer l'application
+            error = f"erreur inattendue : {e}"
+        finally:
+            self.stop_engine()
+            filled = prepared_count(db.cards(deck_ids=self.deck_ids)) - before
+            db.close()
+            self.done.emit(filled, error)
+
+    def stop_engine(self) -> None:
+        getattr(self.engine, "close", lambda: None)()
 
 
 class ChoiceCard(QFrame):
@@ -68,8 +107,11 @@ class QuizPage(QWidget):
         self.index = 0
         self.score = 0
         self.answered = False
-        self.mistakes: list[QuizQuestion] = []
+        self.mistakes: list[tuple[QuizQuestion, int]] = []  # question ratée, réponse choisie
         self.labels: dict[int, str] = {}
+        self.custom: list[int] | None = None
+        self._thread: QThread | None = None
+        self.worker: PrepareWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 24, 28, 24)
@@ -96,9 +138,8 @@ class QuizPage(QWidget):
         w.setObjectName("page")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(page_header("QCM", "Quatre réponses proposées, une seule est la bonne. Les mauvaises réponses "
-                                         "viennent des autres cartes du cours : plus le cours a de cartes, plus "
-                                         "le QCM est piégeux. Le QCM ne modifie pas ton planning de révision."))
+        lay.addWidget(page_header("QCM", "Quatre propositions, une seule est juste. "
+                                         "Le QCM ne change rien à ton planning de révision."))
         self.scope = QComboBox()
         self.scope.setMinimumWidth(420)
         self.scope.currentIndexChanged.connect(self._update_setup)
@@ -110,8 +151,31 @@ class QuizPage(QWidget):
         lay.addLayout(row(muted("Longueur :"), self.count, None))
         self.info = muted("")
         lay.addWidget(self.info)
+
+        self.traps = QFrame()
+        self.traps.setObjectName("note")
+        tl = QVBoxLayout(self.traps)
+        tl.setContentsMargins(18, 14, 18, 14)
+        self.traps_title = QLabel()
+        self.traps_title.setObjectName("section")
+        self.traps_text = muted("")
+        self.prepare_btn = QPushButton("Préparer les réponses pièges")
+        self.prepare_btn.clicked.connect(self.ask_prepare)
+        self.stop_btn = QPushButton("Arrêter")
+        self.stop_btn.clicked.connect(self.stop_prepare)
+        self.stop_btn.setVisible(False)
+        self.traps_status = muted("")
+        self.traps_status.setWordWrap(False)
+        tl.addWidget(self.traps_title)
+        tl.addWidget(self.traps_text)
+        tl.addLayout(row(self.prepare_btn, self.stop_btn, self.traps_status, None))
+        lay.addSpacing(6)
+        lay.addWidget(self.traps)
+        lay.addSpacing(6)
+
         self.start_btn = QPushButton("Commencer le QCM")
         self.start_btn.setObjectName("primary")
+        self.start_btn.setMinimumHeight(46)
         self.start_btn.clicked.connect(self.start)
         lay.addLayout(row(self.start_btn, None))
         lay.addStretch(1)
@@ -185,9 +249,17 @@ class QuizPage(QWidget):
         """Revient à l'écran de préparation, sauf si un QCM est en cours."""
         if self.pages.currentIndex() == 1 and self.questions:
             return
-        fill_scope_combo(self.scope, self.db)
+        fill_scope_combo(self.scope, self.db, self.custom)
         self.labels = {d.id: deck_label(d) for d in self.db.decks()}
         self.pages.setCurrentIndex(0)
+        self._update_setup()
+
+    def set_scope(self, deck_ids: list[int]) -> None:
+        """Prépare un QCM sur ces cours (ceux cochés dans « Mes cours »)."""
+        self.custom = deck_ids
+        self.questions = []
+        self.refresh()
+        select_scope(self.scope, deck_ids)
         self._update_setup()
 
     def _cards(self) -> list[Card]:
@@ -201,11 +273,76 @@ class QuizPage(QWidget):
         usable = usable_count(cards)
         self.start_btn.setEnabled(usable > 0)
         if self.scope.count() == 0:
-            self.info.setText("Aucun cours pour l'instant : importe un PDF dans l'onglet « Importer ».")
+            self.info.setText("Aucun cours pour l'instant : commence par « Ajouter un cours ».")
         elif usable == 0:
             self.info.setText("Il faut au moins deux cartes aux réponses différentes pour faire un QCM.")
         else:
-            self.info.setText(f"{usable} question(s) possible(s) avec ce choix.")
+            self.info.setText(f"{usable} question{'s' if usable > 1 else ''} possible{'s' if usable > 1 else ''} "
+                              "avec ce choix.")
+        self._update_traps(cards)
+
+    def _update_traps(self, cards: list[Card]) -> None:
+        missing = len(cards) - prepared_count(cards)
+        busy = self.worker is not None
+        self.traps.setVisible(bool(cards))
+        self.prepare_btn.setVisible(missing > 0 or busy)
+        self.prepare_btn.setEnabled(not busy)
+        self.stop_btn.setVisible(busy)
+        if missing == 0:
+            self.traps_title.setText("Réponses pièges prêtes")
+            self.traps_text.setText("Pour chaque question, l'IA a écrit de fausses réponses crédibles : "
+                                    "impossible de deviner sans connaître le cours.")
+        else:
+            self.traps_title.setText("QCM trop facile pour l'instant" if missing == len(cards)
+                                     else f"Réponses pièges prêtes pour {len(cards) - missing} questions "
+                                          f"sur {len(cards)}")
+            self.traps_text.setText(
+                f"Pour {missing} question{'s' if missing > 1 else ''}, les mauvaises réponses sont empruntées à "
+                "d'autres questions du cours : elles se repèrent vite. L'IA peut écrire à la place de fausses "
+                "réponses crédibles sur le même sujet. C'est à faire une seule fois par cours.")
+
+    # -- réponses pièges --------------------------------------------------------
+
+    def ask_prepare(self) -> None:
+        deck_ids = list(self.scope.currentData() or [])
+        if not deck_ids or self.worker is not None:
+            return
+        online = distractors.default_engine_name() == "en-ligne"
+        how = ("L'IA en ligne va écrire les réponses pièges : compte une à deux minutes pour cent questions. "
+               "Les questions du cours sont envoyées au service d'IA choisi." if online else
+               "L'IA installée sur cet ordinateur va écrire les réponses pièges. Si elle n'a encore jamais servi, "
+               "elle est d'abord téléchargée (2,5 à 7 Go, une seule fois). Ensuite, compte plusieurs minutes "
+               "pour cent questions.")
+        if confirm(self, "Préparer les réponses pièges",
+                   how + "\n\nTu peux arrêter quand tu veux : ce qui est fait est gardé.", "Lancer"):
+            self.start_prepare(deck_ids)
+
+    def start_prepare(self, deck_ids: list[int]) -> None:
+        self._thread = QThread(self)
+        self.worker = PrepareWorker(Path(self.db.path), deck_ids)
+        self.worker.moveToThread(self._thread)
+        self._thread.started.connect(self.worker.run)
+        self.worker.status.connect(self.traps_status.setText)
+        self.worker.done.connect(self._prepare_done)
+        self.traps_status.setText("Démarrage…")
+        self._update_traps(self._cards())
+        self._thread.start()
+
+    def stop_prepare(self) -> None:
+        if self.worker:
+            self.worker.cancelled = True
+            self.stop_btn.setEnabled(False)
+            self.traps_status.setText("Arrêt après les questions en cours…")
+
+    def _prepare_done(self, filled: int, error: str) -> None:
+        self._thread.quit()
+        self._thread.wait()
+        self._thread = None
+        self.worker = None
+        self.stop_btn.setEnabled(True)
+        self.traps_status.setText(error if error else f"Terminé : {filled} question{'s' if filled > 1 else ''} "
+                                                      f"complétée{'s' if filled > 1 else ''}.")
+        self._update_traps(self._cards())
 
     def start(self) -> None:
         cards = self._cards()
@@ -213,7 +350,7 @@ class QuizPage(QWidget):
 
     def retry_mistakes(self) -> None:
         pool = self._cards()
-        self._run(build_quiz([q.card for q in self.mistakes], len(self.mistakes), pool=pool))
+        self._run(build_quiz([q.card for q, _ in self.mistakes], len(self.mistakes), pool=pool))
 
     def _run(self, questions: list[QuizQuestion]) -> None:
         if not questions:
@@ -268,7 +405,7 @@ class QuizPage(QWidget):
             self.score += 1
             self.feedback.setText(f"<span style='color:{theme.GOOD}'><b>Bonne réponse !</b></span>")
         else:
-            self.mistakes.append(q)
+            self.mistakes.append((q, i))
             self.feedback.setText(f"<span style='color:{theme.BAD}'><b>Raté</b></span> — la bonne réponse "
                                   f"était la {q.correct + 1}.")
         last = self.index == len(self.questions) - 1
@@ -299,8 +436,9 @@ class QuizPage(QWidget):
             f"{pct} % de bonnes réponses. " + ("Sans faute, bravo !" if not self.mistakes
                                                else "Voici ce qu'il faut revoir :"))
         parts = []
-        for q in self.mistakes:
-            parts.append(f"**{cloze_question(q.card.question)}**\n\n{q.card.answer}")
+        for q, chosen in self.mistakes:
+            parts.append(f"**{cloze_question(q.card.question)}**\n\n"
+                         f"Ta réponse : {q.choices[chosen]}\n\nLa bonne réponse : {q.card.answer}")
         self.review_view.setMarkdown("\n\n---\n\n".join(parts))
         self.review_view.setVisible(bool(self.mistakes))
         self.retry_btn.setVisible(bool(self.mistakes))

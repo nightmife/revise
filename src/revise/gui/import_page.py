@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QFileDialog, QListWidget, QListWidgetItem, QMessageBox,
-                               QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget,
-                               QApplication)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
+                               QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
+                               QWidget)
 
 from revise import config
 from revise.db import Database, file_sha256
 from revise.engines import online
-from revise.gui.common import muted, page_header, row
+from revise.gui.common import muted, page_header, row, save_cancel_buttons
 from revise.importer import guess_subject, import_pdf
 from revise.models import ReviseError
 
@@ -31,13 +33,15 @@ def make_engine(name: str):
 
 
 class KeyDialog(QDialog):
-    """Réglages de l'IA en ligne : service, clé API, modèle."""
+    """Réglages de l'IA en ligne : service et clé ; modèle et adresse pour ceux qui savent."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Clé API de l'IA en ligne")
-        self.resize(620, 300)
+        self.setWindowTitle("Configurer l'IA en ligne")
+        self.resize(640, 320)
         form = QFormLayout(self)
+        form.addRow(muted("L'IA en ligne est gratuite, mais il faut une « clé » : un mot de passe que le service "
+                          "te donne pour l'utiliser. Deux minutes, une seule fois."))
         self.provider = QComboBox()
         for key, (label, *_rest) in online.PROVIDERS.items():
             self.provider.addItem(label, key)
@@ -49,13 +53,16 @@ class KeyDialog(QDialog):
         self.key.setPlaceholderText("colle ta clé ici")
         self.model = QLineEdit()
         self.url = QLineEdit()
-        form.addRow("Service :", self.provider)
-        form.addRow("", self.link)
-        form.addRow("Clé API :", self.key)
-        form.addRow("Modèle :", self.model)
-        form.addRow("Adresse :", self.url)
+        self.advanced = QCheckBox("Réglages avancés (modèle, adresse)")
+        self.model_label, self.url_label = QLabel("Modèle :"), QLabel("Adresse :")
+        form.addRow("1. Service :", self.provider)
+        form.addRow("2. Clé :", self.link)
+        form.addRow("3. Colle-la :", self.key)
+        form.addRow(self.advanced)
+        form.addRow(self.model_label, self.model)
+        form.addRow(self.url_label, self.url)
         form.addRow(muted("La clé reste sur cet ordinateur. Le texte de tes cours est envoyé au service choisi."))
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = save_cancel_buttons()
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
@@ -67,17 +74,27 @@ class KeyDialog(QDialog):
         self.model.setText(current["model"])
         self.url.setText(current["url"])
         self.provider.currentIndexChanged.connect(self._provider_changed)
+        self.advanced.toggled.connect(self._show_advanced)
+        self._show_advanced()
+
+    def _show_advanced(self, *_) -> None:
+        """Modèle et adresse : cachés, sauf pour un service « autre » qui n'a pas de valeurs par défaut."""
+        show = self.advanced.isChecked() or self.provider.currentData() == "autre"
+        for w in (self.model_label, self.model, self.url_label, self.url):
+            w.setVisible(show)
 
     def _provider_changed(self) -> None:
         _, url, model, page = online.PROVIDERS[self.provider.currentData()]
         self.model.setText(model)
         self.url.setText(url)
-        self.link.setText(f"Crée une clé gratuite ici : <a href='{page}' style='color:#8aa3ff'>{page}</a>" if page
+        self.link.setText(f"Ouvre <a href='{page}' style='color:#8aa3ff'>{page}</a>, crée un compte gratuit, "
+                          "puis clique sur le bouton qui crée une clé et copie-la." if page
                           else "Indique l'adresse de l'API (elle finit souvent par /v1) et le nom du modèle.")
+        self._show_advanced()
 
     def _save(self) -> None:
         if not self.key.text().strip():
-            QMessageBox.warning(self, "Clé API", "Colle ta clé API avant d'enregistrer.")
+            QMessageBox.warning(self, "Clé manquante", "Colle ta clé avant d'enregistrer.")
             return
         config.save({"online_provider": self.provider.currentData(), "online_key": self.key.text().strip(),
                      "online_model": self.model.text().strip(), "online_url": self.url.text().strip()})
@@ -108,7 +125,7 @@ class ImportWorker(QObject):
                 try:
                     res = import_pdf(db, engine, pdf, self.subject, lambda m, n=pdf.name: self.status.emit(f"{n} : {m}"))
                     if res.skipped:
-                        self.file_done.emit(pdf.name, "déjà importé", True)
+                        self.file_done.emit(pdf.name, "déjà ajouté", True)
                     else:
                         imported += 1
                         self.file_done.emit(pdf.name, f"{len(res.cards)} cartes", True)
@@ -136,70 +153,111 @@ class ImportPage(QWidget):
         self.db = db
         self._thread: QThread | None = None
         self.worker: ImportWorker | None = None
+        self._scanned = False
         self.setAcceptDrops(True)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
-        lay.addWidget(page_header("Importer des cours",
-                                  "Coche les PDF de CM à transformer en cartes. Tu peux aussi glisser-déposer des PDF ici."))
+        lay.addWidget(page_header("Ajouter un cours",
+                                  "Donne le PDF d'un cours : l'application en tire des cartes de révision, "
+                                  "une fiche et des QCM."))
 
+        self.drop = QFrame()
+        self.drop.setObjectName("drop")
+        dl = QHBoxLayout(self.drop)
+        dl.setContentsMargins(20, 16, 20, 16)
+        drop_text = QLabel("Glisse tes PDF ici")
+        drop_text.setObjectName("section")
+        add_btn = QPushButton("Choisir des PDF…")
+        add_btn.setObjectName("primary")
+        add_btn.clicked.connect(self.browse)
+        self.scan_btn = QPushButton("Chercher sur cet ordinateur")
+        self.scan_btn.setToolTip("Liste les PDF des dossiers Téléchargements et Documents.")
+        self.scan_btn.clicked.connect(lambda: self.scan())
+        dl.addWidget(drop_text)
+        dl.addWidget(muted("ou"))
+        dl.addWidget(add_btn)
+        dl.addWidget(self.scan_btn)
+        dl.addStretch(1)
+        lay.addWidget(self.drop)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Rechercher un PDF dans la liste…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        self.count_label = muted("")
+        self.count_label.setWordWrap(False)
+        lay.addLayout(row(self.search, self.count_label))
         self.files = QListWidget()
         lay.addWidget(self.files, 1)
-        add_btn = QPushButton("Ajouter des PDF…")
-        add_btn.clicked.connect(self.browse)
-        scan_btn = QPushButton("Actualiser")
-        scan_btn.clicked.connect(self.scan)
-        self.count_label = muted("")
-        lay.addLayout(row(add_btn, scan_btn, self.count_label, None))
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
         self.subject.setMinimumWidth(320)
+        self.subject.setToolTip("Sert à regrouper les cours. Tu peux taper un nouveau nom (ex. Histoire).")
         lay.addLayout(row(muted("Matière :"), self.subject, None))
 
+        how = QLabel("Qui écrit les cartes ?")
+        how.setObjectName("section")
+        lay.addWidget(how)
         self.engine_group = QButtonGroup(self)
-        self.r_ia = QRadioButton("IA intégrée — gratuite, hors ligne, rien à installer")
-        self.r_ia.setToolTip("Le modèle (2,5 à 7 Go selon la mémoire de l'ordinateur) est téléchargé une seule fois, "
-                             "au premier import.")
-        self.r_online = QRadioButton("IA en ligne — rapide, avec ta clé API gratuite (Internet nécessaire)")
-        self.r_simple = QRadioButton("Sans IA — instantané, cartes à retoucher")
-        key_btn = QPushButton("Clé API…")
+        self.r_ia = QRadioButton("L'IA de cet ordinateur (conseillé)")
+        self.r_online = QRadioButton("L'IA en ligne (le plus rapide)")
+        self.r_simple = QRadioButton("Sans IA")
+        key_btn = QPushButton("Configurer…")
         key_btn.clicked.connect(self.edit_key)
         self.key_state = muted("")
+        self.key_state.setWordWrap(False)
+        details = {
+            self.r_ia: "Gratuit, privé, sans compte. Lent : plusieurs minutes par cours, et un gros téléchargement "
+                       "la première fois (2,5 à 7 Go).",
+            self.r_online: "Quelques secondes par cours. Gratuit, mais il faut créer une clé (2 minutes) "
+                           "et le texte du cours est envoyé sur Internet.",
+            self.r_simple: "Immédiat, mais cartes approximatives à corriger et QCM facile.",
+        }
         for i, r in enumerate((self.r_ia, self.r_online, self.r_simple)):
             self.engine_group.addButton(r, i)
+            font = r.font()
+            font.setBold(True)
+            r.setFont(font)
             if r is self.r_online:
                 lay.addLayout(row(r, key_btn, self.key_state, None))
-            elif r is self.r_ia:
-                lay.addLayout(row(r, muted("modèle téléchargé au premier import (2,5 à 7 Go), "
-                                           "plusieurs minutes par cours"), None))
             else:
                 lay.addWidget(r)
+            detail = muted(details[r])
+            detail.setContentsMargins(30, 0, 0, 4)
+            lay.addWidget(detail)
         saved = config.load().get("engine")
         self.engine_group.button(ENGINES.index(saved) if saved in ENGINES else 0).setChecked(True)
         self._update_key_state()
 
-        self.import_btn = QPushButton("Importer la sélection")
+        self.import_btn = QPushButton("Créer les cartes")
         self.import_btn.setObjectName("primary")
+        self.import_btn.setMinimumHeight(46)
         self.import_btn.clicked.connect(self.start)
         self.cancel_btn = QPushButton("Arrêter après ce PDF")
         self.cancel_btn.clicked.connect(self.cancel)
         self.cancel_btn.setVisible(False)
+        self.status = muted("")
         lay.addLayout(row(self.import_btn, self.cancel_btn, None))
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         self.progress.setTextVisible(False)
-        self.status = muted("")
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(130)
+        self.log.setMaximumHeight(110)
         self.log.setVisible(False)
         lay.addWidget(self.progress)
         lay.addWidget(self.status)
         lay.addWidget(self.log)
         self.files.itemChanged.connect(self._update_count)
-        self.scan()
+        self.refresh_subjects()
+        # Sur Mac, lire Téléchargements/Documents déclenche une demande d'autorisation du système :
+        # on ne le fait que si l'utilisateur clique sur « Chercher sur cet ordinateur ».
+        if sys.platform != "darwin":
+            self.scan()
+        self._update_count()
 
     # ------------------------------------------------------------- fichiers
     def refresh_subjects(self) -> None:
@@ -219,7 +277,7 @@ class ImportPage(QWidget):
         if str(path) in self._known_paths() or path.suffix.lower() != ".pdf" or not path.is_file():
             return
         done = self.db.find_deck_by_hash(file_sha256(path)) is not None
-        label = f"{path.name}   —   {guess_subject(path)}" + ("   ✓ déjà importé" if done else "")
+        label = path.name + ("   ✓ déjà ajouté" if done else f"   —   {guess_subject(path)}")
         item = QListWidgetItem(label)
         item.setData(PATH_ROLE, str(path))
         item.setToolTip(str(path))
@@ -228,24 +286,42 @@ class ImportPage(QWidget):
         else:
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-        self.files.addItem(item)
+        if checked:
+            self.files.insertItem(0, item)  # ce que l'utilisateur vient de choisir reste sous ses yeux
+        else:
+            self.files.addItem(item)
 
-    def scan(self) -> None:
-        """Liste les PDF des dossiers habituels (Téléchargements, Documents)."""
+    def _filter(self, *_) -> None:
+        text = self.search.text().lower().strip()
+        for i in range(self.files.count()):
+            it = self.files.item(i)
+            it.setHidden(bool(text) and text not in it.text().lower())
+
+    def scan(self, search: bool = True) -> None:
+        """Reconstruit la liste : les PDF déjà cochés, puis (si `search`) ceux des dossiers habituels
+        (Téléchargements, Documents), ceux déjà ajoutés en dernier."""
+        self._scanned = self._scanned or search
         self.files.blockSignals(True)
-        checked = {p for p in self.selected_paths()}
+        checked = self.selected_paths()
         self.files.clear()
         home = Path.home()
         found: list[Path] = []
-        for d in SEARCH_DIRS:
+        for d in SEARCH_DIRS if search else []:
             base = home / d
             if base.is_dir():
                 found += [p for p in base.rglob("*.pdf") if len(p.relative_to(base).parts) <= 3]
         found = sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)[:300]  # les plus récents
+        for p in reversed(checked):  # les PDF choisis à la main restent, même hors des dossiers habituels
+            self.add_file(p, checked=True)
         for p in sorted(found, key=lambda p: p.name.lower()):
-            self.add_file(p, checked=str(p.resolve()) in {str(c) for c in checked})
+            self.add_file(p)
+        done = [i for i in range(self.files.count())
+                if not self.files.item(i).flags() & Qt.ItemFlag.ItemIsEnabled]
+        for it in [self.files.takeItem(i) for i in reversed(done)][::-1]:
+            self.files.addItem(it)
         self.files.blockSignals(False)
         self.refresh_subjects()
+        self._filter()
         self._update_count()
 
     def browse(self) -> None:
@@ -255,11 +331,21 @@ class ImportPage(QWidget):
             self.add_file(Path(p), checked=True)
         self._update_count()
 
+    def _highlight_drop(self, on: bool) -> None:
+        self.drop.setProperty("active", "true" if on else "false")
+        self.drop.style().unpolish(self.drop)
+        self.drop.style().polish(self.drop)
+
     def dragEnterEvent(self, e) -> None:
         if e.mimeData().hasUrls():
+            self._highlight_drop(True)
             e.acceptProposedAction()
 
+    def dragLeaveEvent(self, e) -> None:
+        self._highlight_drop(False)
+
     def dropEvent(self, e) -> None:
+        self._highlight_drop(False)
         for url in e.mimeData().urls():
             p = Path(url.toLocalFile())
             if p.is_dir():
@@ -279,8 +365,12 @@ class ImportPage(QWidget):
 
     def _update_count(self, *_):
         n = len(self.selected_paths())
-        self.count_label.setText(f"{n} PDF coché(s)" if n else "Coche les PDF à importer")
+        if n:
+            self.count_label.setText(f"{n} PDF coché{'s' if n > 1 else ''}")
+        else:
+            self.count_label.setText("Coche les PDF à transformer" if self.files.count() else "Aucun PDF choisi")
         self.import_btn.setEnabled(n > 0 and self._thread is None)
+        self.import_btn.setText(f"Créer les cartes de {n} cours" if n > 1 else "Créer les cartes")
 
     # --------------------------------------------------------------- import
     def engine_name(self) -> str:
@@ -288,8 +378,8 @@ class ImportPage(QWidget):
 
     def _update_key_state(self) -> None:
         conf = online.settings()
-        self.key_state.setText(f"clé enregistrée ({online.PROVIDERS[conf['provider']][0]})" if conf["key"]
-                               else "aucune clé enregistrée")
+        self.key_state.setText(f"prête ({online.PROVIDERS[conf['provider']][0]})" if conf["key"]
+                               else "pas encore configurée")
 
     def edit_key(self) -> bool:
         ok = KeyDialog(self).exec() == QDialog.DialogCode.Accepted
@@ -342,6 +432,7 @@ class ImportPage(QWidget):
         self.worker = None
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(True)
-        self.status.setText(f"Terminé : {imported} cours importé(s)." if imported else "Terminé.")
-        self.scan()
+        self.status.setText(f"Terminé : {imported} cours ajouté{'s' if imported > 1 else ''}. "
+                            "Retrouve-le dans « Mes cours »." if imported else "Terminé.")
+        self.scan(search=self._scanned)
         self.imported.emit()

@@ -184,7 +184,7 @@ class StatsPage(QWidget):
         scroll.setWidget(body)
         self.lay = QVBoxLayout(body)
         self.lay.setContentsMargins(28, 24, 28, 24)
-        self.lay.addWidget(page_header("Statistiques"))
+        self.lay.addWidget(page_header("Mes progrès", "Ta régularité et ce qui t'attend les prochains jours."))
         self.kpis = QHBoxLayout()
         self.lay.addLayout(self.kpis)
         self.lay.addSpacing(10)
@@ -227,8 +227,8 @@ class StatsPage(QWidget):
         ret = f"{100 * d['retention']:.0f} %" if d["retention"] is not None else "—"
         self.kpis.addWidget(kpi("Série", f"{d['streak']} j", "jours de suite avec au moins une révision"))
         self.kpis.addWidget(kpi("Aujourd'hui", f"{d['today']}", f"cartes en {d['minutes']:.0f} min"))
-        self.kpis.addWidget(kpi("Rétention (30 j)", ret,
-                                f"sur {d['retention_n']} rappels" if d["retention_n"] else "pas encore de données"))
+        self.kpis.addWidget(kpi("Réponses justes (30 j)", ret,
+                                f"sur {d['retention_n']} cartes revues" if d["retention_n"] else "pas encore de données"))
         rows = stats.subject_rows(self.db, now)
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):

@@ -7,12 +7,12 @@ import time
 from fsrs import Rating
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QLabel, QPlainTextEdit,
+from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QFrame, QLabel, QPlainTextEdit,
                                QProgressBar, QPushButton, QSpinBox, QTextBrowser, QVBoxLayout, QWidget)
 
 from revise.db import Card, Database, deck_label, utcnow
 from revise.gui import theme
-from revise.gui.common import muted, row
+from revise.gui.common import muted, row, save_cancel_buttons
 from revise.models import KINDS
 from revise.scheduler import RATING_LABELS, Session, format_interval, preview
 
@@ -43,7 +43,7 @@ class CardEditDialog(QDialog):
         form.addRow("Question", self.question)
         form.addRow("Réponse", self.answer)
         form.addRow(muted("Markdown accepté : **gras**, `code`, listes, blocs ``` pour le code."))
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = save_cancel_buttons()
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
@@ -129,13 +129,19 @@ class ReviewPage(QWidget):
             b.clicked.connect(lambda _=False, v=int(r): self.rate(v))
             self.rate_btns[int(r)] = b
         self.rate_row = row(*self.rate_btns.values(), spacing=12)
+        self.rate_hint = muted("Tu avais la bonne réponse ? Sois honnête : c'est ce qui décide quand la carte revient. "
+                               "(touches 1 à 4)")
+        self.rate_hint.setWordWrap(False)
         lay.addWidget(self.reveal_btn)
+        lay.addWidget(self.rate_hint)
         lay.addLayout(self.rate_row)
 
-        self.edit_btn = QPushButton("Modifier (E)")
+        self.edit_btn = QPushButton("Corriger la carte")
+        self.edit_btn.setToolTip("Touche E")
         self.edit_btn.clicked.connect(self.edit)
-        self.suspend_btn = QPushButton("Suspendre (S)")
-        self.suspend_btn.setToolTip("La carte ne sera plus proposée.")
+        self.suspend_btn = QPushButton("Ne plus me la poser")
+        self.suspend_btn.setToolTip("La carte est mise de côté (touche S). Tu peux la réactiver depuis "
+                                    "« Voir et corriger les cartes ».")
         self.suspend_btn.clicked.connect(self.suspend)
         self.back_btn = QPushButton("Retour aux cours")
         self.where.setMinimumWidth(10)
@@ -172,20 +178,20 @@ class ReviewPage(QWidget):
         if self.exam:
             known = self.total - s.remaining
             self.progress.setValue(known)
-            skipped = f" · {s.known_skipped} déjà sues sautées" if s.known_skipped else ""
-            html = (f"<b>MODE EXAMEN</b> &nbsp; <span style='color:{theme.GOOD}'>{known} / {self.total} sues</span>"
+            skipped = f" · {s.known_skipped} déjà connues sautées" if s.known_skipped else ""
+            html = (f"<b>TOUT REVOIR</b> &nbsp; <span style='color:{theme.GOOD}'>{known} / {self.total} connues</span>"
                     f" &nbsp; <span style='color:{theme.ACCENT_HOVER}'>{new} jamais vues</span>"
                     f" &nbsp; <span style='color:{theme.WARN}'>{learning} à revoir</span>"
                     f" &nbsp; <span style='color:{theme.MUTED}'>{s.done} réponses{skipped}</span>")
         else:
             html = (f"<span style='color:{theme.ACCENT_HOVER}'>{new} nouvelles</span> &nbsp; "
-                    f"<span style='color:{theme.WARN}'>{learning} en apprentissage</span> &nbsp; "
-                    f"<span style='color:{theme.GOOD}'>{review} à réviser</span> &nbsp; "
+                    f"<span style='color:{theme.WARN}'>{learning} en cours d'apprentissage</span> &nbsp; "
+                    f"<span style='color:{theme.GOOD}'>{review} à revoir</span> &nbsp; "
                     f"<span style='color:{theme.MUTED}'>{s.done} faites</span>")
         self.counts.setText(html)
 
     def _show_rating(self, visible: bool) -> None:
-        for b in self.rate_btns.values():
+        for b in (*self.rate_btns.values(), self.rate_hint):
             b.setVisible(visible)
         self.reveal_btn.setVisible(not visible and self.card is not None)
 
@@ -222,7 +228,8 @@ class ReviewPage(QWidget):
         self.sep.setVisible(True)
         iv = preview(self.session.scheduler, self.card, utcnow())
         for r in Rating:
-            self.rate_btns[int(r)].setText(f"{int(r)} · {RATING_LABELS[r]}\n{format_interval(iv[r])}")
+            self.rate_btns[int(r)].setText(f"{RATING_LABELS[r]}\nrevient dans {format_interval(iv[r])}")
+            self.rate_btns[int(r)].setToolTip(f"Touche {int(r)}")
         self._show_rating(True)
 
     def rate(self, value: int) -> None:
@@ -260,17 +267,17 @@ class ReviewPage(QWidget):
         self.kind.setText("")
         s = self.session
         if s and self.exam and s.done:
-            msg = (f"## Tout est su !\n\nLes {self.total} cartes ont été notées « Bien » ou « Facile » "
+            msg = (f"## Tu sais tout !\n\nLes {self.total} cartes ont été notées « Bien » ou « Facile » "
                    f"({s.done} réponses en {minutes:.0f} min).\n\nBon courage pour le contrôle !")
         elif s and self.exam and s.known_skipped:
-            msg = (f"## Déjà tout su\n\nLes {s.known_skipped} cartes de ces cours sont déjà sues. "
-                   "Coche « Revoir aussi les cartes déjà sues » pour une dernière passe complète.")
+            msg = (f"## Tu sais déjà tout\n\nLes {s.known_skipped} cartes de ces cours sont déjà connues. "
+                   "Coche « Tout revoir repose aussi les cartes déjà connues » pour une dernière passe complète.")
         elif s and s.done:
             msg = (f"## Séance terminée\n\n{s.done} cartes révisées en {minutes:.0f} min, "
                    f"dont {s.new_seen} nouvelles. Reviens demain pour la suite.")
         else:
             msg = ("## Rien à réviser pour l'instant\n\nToutes les cartes de ces cours sont à jour. "
-                   "Utilise le **mode examen** pour tout revoir maintenant.")
+                   "Utilise **Tout revoir** pour les reprendre toutes maintenant, ou fais un **QCM**.")
         self.question.setMarkdown(msg)
         if s:
             self.update_counts()

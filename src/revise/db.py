@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,7 +34,8 @@ CREATE TABLE IF NOT EXISTS cards(
     fsrs TEXT,                 -- état FSRS sérialisé (NULL = jamais révisée)
     due TEXT NOT NULL,         -- ISO 8601 UTC, comparable lexicographiquement
     suspended INTEGER NOT NULL DEFAULT 0,
-    created TEXT NOT NULL
+    created TEXT NOT NULL,
+    distractors TEXT           -- mauvaises réponses de QCM (liste JSON), NULL = pas encore préparées
 );
 CREATE INDEX IF NOT EXISTS cards_due ON cards(due);
 CREATE INDEX IF NOT EXISTS cards_deck ON cards(deck_id);
@@ -98,6 +100,7 @@ class Card:
     fsrs: str | None
     due: str
     suspended: bool
+    distractors: list[str] = field(default_factory=list)
 
     @property
     def is_new(self) -> bool:
@@ -123,6 +126,10 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        # Bases créées avant la version 0.4 : la colonne des mauvaises réponses de QCM n'existe pas.
+        if "distractors" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(cards)")}:
+            with self.conn:
+                self.conn.execute("ALTER TABLE cards ADD COLUMN distractors TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -146,9 +153,10 @@ class Database:
 
     def _insert_card(self, deck_id: int, c: CardDraft, now: str) -> int:
         cur = self.conn.execute(
-            "INSERT INTO cards(deck_id, kind, question, answer, page, section, fsrs, due, created)"
-            " VALUES (?,?,?,?,?,?,NULL,?,?)",
-            (deck_id, c.kind, c.question, c.answer, c.page, c.section, now, now))
+            "INSERT INTO cards(deck_id, kind, question, answer, page, section, fsrs, due, created, distractors)"
+            " VALUES (?,?,?,?,?,?,NULL,?,?,?)",
+            (deck_id, c.kind, c.question, c.answer, c.page, c.section, now, now,
+             json.dumps(c.distractors, ensure_ascii=False) if c.distractors else None))
         return int(cur.lastrowid)
 
     def add_card(self, deck_id: int, c: CardDraft) -> int:
@@ -202,9 +210,17 @@ class Database:
         return self._card(row) if row else None
 
     def update_card_content(self, card_id: int, kind: str, question: str, answer: str, page: int | None) -> None:
+        """Une carte dont la question ou la réponse change perd ses mauvaises réponses de QCM."""
         with self.conn:
-            self.conn.execute("UPDATE cards SET kind=?, question=?, answer=?, page=? WHERE id=?",
-                              (kind, question, answer, page, card_id))
+            self.conn.execute(
+                "UPDATE cards SET distractors = CASE WHEN question = ? AND answer = ? THEN distractors END,"
+                " kind=?, question=?, answer=?, page=? WHERE id=?",
+                (question, answer, kind, question, answer, page, card_id))
+
+    def set_distractors(self, card_id: int, distractors: list[str]) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE cards SET distractors = ? WHERE id = ?",
+                              (json.dumps(distractors, ensure_ascii=False) if distractors else None, card_id))
 
     def delete_card(self, card_id: int) -> None:
         with self.conn:
@@ -269,5 +285,10 @@ class Database:
 
     @staticmethod
     def _card(r: sqlite3.Row) -> Card:
+        try:
+            wrong = json.loads(r["distractors"]) if r["distractors"] else []
+        except ValueError:
+            wrong = []
         return Card(r["id"], r["deck_id"], r["kind"], r["question"], r["answer"], r["page"], r["section"],
-                    r["fsrs"], r["due"], bool(r["suspended"]))
+                    r["fsrs"], r["due"], bool(r["suspended"]),
+                    [str(w) for w in wrong] if isinstance(wrong, list) else [])

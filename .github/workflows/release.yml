@@ -1,0 +1,100 @@
+name: Release
+
+# Construit revise.exe (Windows) et revise.app dans une image disque .dmg (Mac, puces Apple et Intel).
+# Sur une étiquette « v… », tout est publié dans une Release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dépendances
+        run: pip install ".[dev]" pyinstaller pillow
+      - name: Tests
+        run: pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Icône
+        run: python packaging/make_icon.py build/icon.png
+      - name: Construction de revise.exe
+        run: pyinstaller --noconfirm --onefile --windowed --name revise --icon build/icon.png --paths src packaging/revise_gui.py
+      - name: Vérification du démarrage
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/revise.exe -ArgumentList '--selftest' -Wait -PassThru
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: revise-windows
+          path: dist/revise.exe
+
+  mac:
+    strategy:
+      fail-fast: false   # un Mac Intel en panne n'empêche pas de publier la version puce Apple
+      matrix:
+        include:
+          - runner: macos-latest      # puce Apple (M1 et suivantes)
+            arch: arm64
+          - runner: macos-15-intel    # Mac Intel (avant 2020)
+            arch: intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dépendances
+        run: pip install ".[dev]" pyinstaller pillow
+      - name: Tests
+        run: pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Icône
+        run: python packaging/make_icon.py build/icon.png
+      - name: Construction de revise.app
+        run: >
+          pyinstaller --noconfirm --windowed --name revise --icon build/icon.png
+          --osx-bundle-identifier io.github.nightmife.revise --paths src packaging/revise_gui.py
+      - name: Signature locale (sans compte développeur Apple)
+        run: codesign --force --deep --sign - dist/revise.app
+      - name: Vérification du démarrage
+        run: dist/revise.app/Contents/MacOS/revise --selftest
+      - name: Image disque
+        run: |
+          mkdir dmg
+          ditto dist/revise.app dmg/revise.app
+          ln -s /Applications dmg/Applications
+          for essai in 1 2 3 4 5; do   # hdiutil échoue parfois (« Resource busy ») sur ces machines
+            hdiutil create -volname revise -srcfolder dmg -ov -format UDZO "revise-mac-${{ matrix.arch }}.dmg" && break
+            sleep 5
+          done
+          test -f "revise-mac-${{ matrix.arch }}.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: revise-mac-${{ matrix.arch }}
+          path: revise-mac-${{ matrix.arch }}.dmg
+
+  publication:
+    needs: [windows, mac]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') && needs.windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publication
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "revise $GITHUB_REF_NAME" --notes-file packaging/INSTALLATION.md
+        env:
+          GH_TOKEN: ${{ github.token }}

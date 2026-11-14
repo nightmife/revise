@@ -21,10 +21,18 @@ class ImportResult:
     skipped: bool = False  # déjà importé
 
 
+# Dossiers fourre-tout : leur nom ne dit rien de la matière.
+GENERIC_FOLDERS = {"downloads", "téléchargements", "telechargements", "documents", "desktop", "bureau", "tmp", "temp"}
+
+
 def guess_subject(pdf: Path) -> str:
-    """« [LIFAPSD] CM8 - Pile.pdf » → « LIFAPSD », sinon le nom du dossier."""
+    """« [LIFAPSD] CM8 - Pile.pdf » → « LIFAPSD », sinon le nom du dossier (« Mes cours » pour un dossier
+    fourre-tout comme Téléchargements)."""
     m = re.match(r"^\s*\[([^\]]+)\]", pdf.name)
-    return m.group(1).strip() if m else pdf.resolve().parent.name
+    if m:
+        return m.group(1).strip()
+    folder = pdf.resolve().parent.name
+    return "Mes cours" if folder.lower() in GENERIC_FOLDERS or not folder else folder
 
 
 def course_title(pdf: Path, fallback: str) -> str:

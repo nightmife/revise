@@ -4,22 +4,32 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+
+
+def _mac_dir() -> Path:
+    return Path.home() / "Library" / "Application Support" / "revise"
 
 
 def data_dir() -> Path:
     """Dossier des données lourdes (base, moteur d'IA, modèle)."""
-    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return base / "revise"
+    if env := os.environ.get("XDG_DATA_HOME"):
+        return Path(env) / "revise"
+    if sys.platform == "darwin":
+        return _mac_dir()
+    return Path.home() / ".local" / "share" / "revise"
 
 
 def config_path() -> Path:
     if env := os.environ.get("REVISE_CONFIG"):
         return Path(env)
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if sys.platform == "darwin" and not xdg:
+        return _mac_dir() / "config.json"
     if os.name == "nt" and os.environ.get("APPDATA"):
         return Path(os.environ["APPDATA"]) / "revise" / "config.json"
-    base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return base / "revise" / "config.json"
+    return Path(xdg or Path.home() / ".config") / "revise" / "config.json"
 
 
 def load() -> dict:

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox,
+from PySide6.QtWidgets import (QComboBox, QDialog, QListWidget, QListWidgetItem, QMessageBox,
                                QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QVBoxLayout, QWidget, QLabel,
                                QLineEdit)
 
 from revise.db import Database, deck_label
-from revise.gui.common import muted, row
+from revise.gui.common import confirm, muted, row
 from revise.gui.review import KIND_LABEL
 from revise.models import KINDS, CardDraft
 
@@ -69,7 +69,7 @@ class CardsDialog(QDialog):
         self.save_btn = QPushButton("Enregistrer")
         self.save_btn.setObjectName("primary")
         self.save_btn.clicked.connect(self._save)
-        self.suspend_btn = QPushButton("Suspendre")
+        self.suspend_btn = QPushButton("Mettre de côté")
         self.suspend_btn.clicked.connect(self._toggle_suspend)
         self.del_btn = QPushButton("Supprimer la carte")
         self.del_btn.setObjectName("danger")
@@ -89,7 +89,7 @@ class CardsDialog(QDialog):
         self.list.clear()
         for c in self.db.cards(deck_id=self.deck_id):
             first = c.question.strip().splitlines()[0] if c.question.strip() else "(vide)"
-            tag = " [suspendue]" if c.suspended else ""
+            tag = " [mise de côté]" if c.suspended else ""
             it = QListWidgetItem(f"p.{c.page or '?'}  {first[:80]}{tag}")
             it.setData(ID_ROLE, c.id)
             it.setToolTip(c.question)
@@ -127,8 +127,8 @@ class CardsDialog(QDialog):
         self.page.setValue(c.page or 0)
         self.q.setPlainText(c.question)
         self.a.setPlainText(c.answer)
-        self.state.setText("suspendue" if c.suspended else ("jamais vue" if c.is_new else "déjà révisée"))
-        self.suspend_btn.setText("Réactiver" if c.suspended else "Suspendre")
+        self.state.setText("mise de côté" if c.suspended else ("jamais vue" if c.is_new else "déjà révisée"))
+        self.suspend_btn.setText("Réactiver" if c.suspended else "Mettre de côté")
         for b in (self.suspend_btn, self.del_btn):
             b.setEnabled(True)
 
@@ -168,8 +168,7 @@ class CardsDialog(QDialog):
         cid = self._current_id()
         if cid is None:
             return
-        if QMessageBox.question(self, "Supprimer", "Supprimer cette carte et son historique ?") \
-                == QMessageBox.StandardButton.Yes:
+        if confirm(self, "Supprimer", "Supprimer cette carte et son historique ?", "Supprimer"):
             self.db.delete_card(cid)
             self.reload()
 

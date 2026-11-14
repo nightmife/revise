@@ -80,6 +80,29 @@ def cmd_key(db: Database, args) -> int:
     return 0
 
 
+def cmd_traps(db: Database, args) -> int:
+    """Fait écrire par l'IA les mauvaises réponses de QCM des cartes qui n'en ont pas."""
+    from revise.engines import distractors
+    from revise.quiz import prepared_count
+
+    deck_ids = resolve_decks(db, args.cours, None) or [d.id for d in db.decks()]
+    cards = db.cards(deck_ids=deck_ids, include_suspended=False)
+    missing = len(cards) - prepared_count(cards)
+    if not missing:
+        console.print("Toutes les questions ont déjà leurs réponses pièges.")
+        return 0
+    engine = pick_engine(args.moteur) if args.moteur else distractors.default_engine()
+    try:
+        getattr(engine, "check", lambda: None)()
+        with console.status(f"{missing} questions à préparer…") as status:
+            engine.progress = status.update
+            filled = distractors.prepare(db, deck_ids, engine.chat, status.update)
+    finally:
+        getattr(engine, "close", lambda: None)()
+    console.print(f"[green]✓[/] Réponses pièges écrites pour {filled} question(s) sur {missing}.")
+    return 0
+
+
 def resolve_decks(db: Database, tokens: list[str] | None, subject: str | None) -> list[int] | None:
     """`--cours 3 8 CM9` : numéros de paquet ou morceaux de titre (« CM8 », « pile »)."""
     if not tokens:
@@ -255,6 +278,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--modele", help="nom du modèle (défaut : celui conseillé pour le fournisseur)")
     s.add_argument("--url", help="adresse de l'API (fournisseur « autre »)")
     s.set_defaults(func=cmd_key)
+
+    s = sub.add_parser("pieges", help="faire écrire par l'IA les mauvaises réponses des QCM (cours déjà importés)")
+    s.add_argument("-c", "--cours", nargs="+", metavar="COURS", help="seulement ces cours (défaut : tous)")
+    s.add_argument("--moteur", choices=["ia", "en-ligne"], help="défaut : l'IA utilisée pour les imports")
+    s.set_defaults(func=cmd_traps)
 
     s = sub.add_parser("reviser", aliases=["r"], help="lancer une séance de révision")
     s.add_argument("-m", "--matiere")

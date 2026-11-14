@@ -87,7 +87,7 @@ def test_quiz_and_learn_pages(qapp, db, tmp_path):
 
     win.show_page(win.QUIZ)
     quiz = win.quiz
-    assert quiz.start_btn.isEnabled()
+    assert quiz.start_btn.isEnabled() and quiz.prepare_btn.isVisible()     # aucune réponse piège préparée
     quiz.count.setValue(3)
     quiz.start_btn.click()
     assert quiz.pages.currentIndex() == 1 and len(quiz.questions) == 3
@@ -108,4 +108,85 @@ def test_quiz_and_learn_pages(qapp, db, tmp_path):
     quiz.retry_btn.click()
     assert quiz.pages.currentIndex() == 1 and len(quiz.questions) == 1
     assert db.cards()[0].fsrs is None                     # le QCM ne touche pas au planning
+    win.close()
+
+
+def test_activities_open_on_checked_courses(qapp, db):
+    ids = [db.add_deck("Algo", f"CM{i}", None, None, "simple",
+                       [CardDraft("qa", f"Question {i}.{j} ?", f"Réponse {i}.{j}", j + 1) for j in range(3)])
+           for i in range(3)]
+    win = MainWindow(db)
+    win.show()
+    qapp.processEvents()
+    page = win.courses
+    assert not page.quiz_btn.isEnabled() and not page.empty.isVisible()
+    root = page.tree.topLevelItem(0)
+    for row in (0, 2):                                   # un clic sur la ligne suffit à cocher
+        page._on_pressed(root.child(row), 0)
+        page._on_clicked(root.child(row), 0)
+    assert page.selected_decks() == [ids[0], ids[2]] and page.quiz_btn.isEnabled()
+
+    page.quiz_btn.click()
+    assert win.stack.currentWidget() is win.quiz and win.nav.checkedId() == win.QUIZ
+    assert win.quiz.scope.currentText() == "Ma sélection (2 cours)" and win.quiz.scope.currentData() == [ids[0], ids[2]]
+    win.quiz.count.setValue(50)
+    win.quiz.start_btn.click()
+    assert {q.card.deck_id for q in win.quiz.questions} == {ids[0], ids[2]} and len(win.quiz.questions) == 6
+
+    win.show_page(win.COURSES)
+    page.learn_btn.click()
+    assert win.stack.currentWidget() is win.learn and win.learn.scope.currentData() == [ids[0], ids[2]]
+    assert "Question 0.0" in win.learn.view.toPlainText()
+    win.close()
+
+
+def test_empty_app_shows_the_welcome(qapp, db):
+    win = MainWindow(db)
+    win.show()
+    win.show_page(win.COURSES)
+    qapp.processEvents()
+    assert win.courses.empty.isVisible() and not win.courses.tree.isVisible() and not win.courses.review_btn.isVisible()
+    win.close()
+
+
+def test_prepare_traps_from_quiz_page(qapp, db, monkeypatch):
+    import json
+
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from revise.engines import distractors
+
+    deck = db.add_deck("Algo", "CM1", None, None, "simple",
+                       [CardDraft("qa", f"Question {i} ?", f"Réponse {i}", i + 1) for i in range(12)])
+
+    class FakeEngine:
+        closed = False
+
+        def chat(self, system, user, schema):
+            count = user.count("### Question")
+            return json.dumps({"items": [{"n": n, "wrong": [f"Faux {n}a", f"Faux {n}b", f"Faux {n}c"]}
+                                         for n in range(1, count + 1)]})
+
+        def close(self):
+            FakeEngine.closed = True
+
+    monkeypatch.setattr(distractors, "default_engine", lambda: FakeEngine())
+    win = MainWindow(db)
+    win.show()
+    win.show_page(win.QUIZ)
+    quiz = win.quiz
+    assert "trop facile" in quiz.traps_title.text()
+    loop = QEventLoop()
+    quiz.start_prepare([deck])
+    assert quiz.worker is not None and not quiz.prepare_btn.isEnabled()
+    quiz.worker.done.connect(loop.quit)
+    QTimer.singleShot(10_000, loop.quit)
+    loop.exec()
+    qapp.processEvents()
+    assert quiz.worker is None and FakeEngine.closed and "12 questions" in quiz.traps_status.text()
+    assert all(len(c.distractors) == 3 for c in db.cards(deck_id=deck))
+    assert "prêtes" in quiz.traps_title.text() and not quiz.prepare_btn.isVisible()
+    quiz.start_btn.click()
+    q = quiz.questions[0]
+    assert sorted(c for i, c in enumerate(q.choices) if i != q.correct) == sorted(q.card.distractors)
     win.close()

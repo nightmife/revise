@@ -66,6 +66,21 @@ QFrame#choice[state="bad"] {{ border-color: {BAD}; background: #3a1c22; }}
 QFrame#choice[state="off"] {{ border-color: {BORDER}; background: {PANEL}; }}
 QFrame#choice QLabel {{ background: transparent; border: none; }}
 QLabel#choiceKey {{ color: {MUTED}; font-weight: 700; }}
+QFrame#action {{ background: {PANEL_2}; border: 1px solid {BORDER}; border-radius: 12px; }}
+QFrame#action:hover, QFrame#action:focus {{ border-color: {ACCENT}; background: #2e3244; }}
+QFrame#action[primary="true"] {{ background: {ACCENT_DIM}; border-color: {ACCENT}; }}
+QFrame#action[primary="true"]:hover, QFrame#action[primary="true"]:focus {{ background: #34437c; }}
+QFrame#action:disabled {{ background: {PANEL}; border-color: {PANEL_2}; }}
+QFrame#action QLabel {{ background: transparent; border: none; }}
+QLabel#actionTitle {{ font-size: 12.5pt; font-weight: 700; }}
+QLabel#actionText {{ color: {MUTED}; font-size: 10pt; }}
+QLabel#actionTitle:disabled, QLabel#actionText:disabled {{ color: #5d6276; }}
+QFrame#drop {{ background: {PANEL}; border: 2px dashed #4a5070; border-radius: 14px; }}
+QFrame#drop[active="true"] {{ border-color: {ACCENT}; background: {PANEL_2}; }}
+QFrame#drop QLabel {{ background: transparent; border: none; }}
+QFrame#note {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px; }}
+QFrame#note QLabel {{ background: transparent; border: none; }}
+QLabel#step {{ font-size: 12pt; }}
 QProgressBar {{ background: {PANEL_2}; border: none; border-radius: 4px; height: 8px; text-align: center; }}
 QProgressBar::chunk {{ background: {ACCENT}; border-radius: 4px; }}
 QRadioButton, QCheckBox {{ spacing: 8px; padding: 3px 0; }}
@@ -91,3 +106,27 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 QSplitter::handle {{ background: transparent; }}
 QToolTip {{ background: {PANEL_2}; color: {TEXT}; border: 1px solid {BORDER}; padding: 5px; border-radius: 6px; }}
 """
+
+
+def app_icon(size: int = 256):
+    """Icône de l'application, dessinée ici pour ne dépendre d'aucun fichier : deux cartes superposées."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    u = size / 100
+    p.setBrush(QColor(SURFACE))
+    p.drawRoundedRect(QRectF(4 * u, 4 * u, 92 * u, 92 * u), 21 * u, 21 * u)
+    p.setBrush(QColor(ACCENT_DIM))
+    p.drawRoundedRect(QRectF(32 * u, 20 * u, 46 * u, 56 * u), 8 * u, 8 * u)
+    p.setBrush(QColor(ACCENT))
+    p.drawRoundedRect(QRectF(22 * u, 28 * u, 46 * u, 56 * u), 8 * u, 8 * u)
+    p.setBrush(QColor(SURFACE))
+    for y, w in ((42, 30), (53, 30), (64, 18)):
+        p.drawRoundedRect(QRectF(30 * u, y * u, w * u, 5 * u), 2.5 * u, 2.5 * u)
+    p.end()
+    return QIcon(pix)

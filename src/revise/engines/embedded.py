@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import platform as platform_info
 import shutil
 import socket
 import subprocess
@@ -23,7 +24,7 @@ import zipfile
 from pathlib import Path
 
 from revise import config
-from revise.engines import Progress
+from revise.engines import Progress, distractors
 from revise.engines.prompt import CARD_SCHEMA, generate_cards
 from revise.models import CardDraft, ReviseError
 
@@ -74,14 +75,24 @@ def pick_model(ram: float | None = None) -> str:
     return "12b" if ram >= BIG_MODEL_RAM else "4b"
 
 
-def server_asset(kind: str, platform: str | None = None) -> str:
-    """Nom de l'archive llama.cpp pour ce système. `kind` : « vulkan » (carte graphique) ou « cpu »."""
+def server_kinds(platform: str | None = None) -> list[tuple[str, list[str]]]:
+    """Moteurs à essayer dans l'ordre, avec leurs options : carte graphique d'abord, puis processeur seul."""
+    if (platform or sys.platform) == "darwin":  # un seul moteur sur Mac, la carte graphique (Metal) est incluse
+        return [("mac", []), ("mac", ["-ngl", "0"])]
+    return [("vulkan", []), ("vulkan", ["-ngl", "0"]), ("cpu", [])]
+
+
+def server_asset(kind: str, platform: str | None = None, machine: str | None = None) -> str:
+    """Nom de l'archive llama.cpp pour ce système. `kind` : « vulkan » (carte graphique), « cpu » ou « mac »."""
     platform = platform or sys.platform
+    if platform == "darwin":
+        arch = "arm64" if (machine or platform_info.machine()).lower() in ("arm64", "aarch64") else "x64"
+        return f"llama-{LLAMA_TAG}-bin-macos-{arch}.tar.gz"
     if platform.startswith("win"):
         return f"llama-{LLAMA_TAG}-bin-win-{kind}-x64.zip"
     if platform.startswith("linux"):
         return f"llama-{LLAMA_TAG}-bin-ubuntu-{'vulkan-' if kind == 'vulkan' else ''}x64.tar.gz"
-    raise ReviseError("L'IA intégrée n'existe que pour Windows et Linux (64 bits) : utilise l'IA en ligne.")
+    raise ReviseError("L'IA intégrée n'existe que pour Windows, Mac et Linux (64 bits) : utilise l'IA en ligne.")
 
 
 def download(url: str, dest: Path, progress: Progress, label: str, expected: int | None = None,
@@ -197,7 +208,8 @@ class EmbeddedEngine:
                "-c", str(CONTEXT), "-np", "1", *extra]
         env = dict(os.environ)
         if os.name != "nt":
-            env["LD_LIBRARY_PATH"] = f"{exe.parent}:{env.get('LD_LIBRARY_PATH', '')}"
+            for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+                env[var] = f"{exe.parent}:{env.get(var, '')}"
         log = open(ia_dir() / "serveur.log", "ab")
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
@@ -227,8 +239,7 @@ class EmbeddedEngine:
             return
         self.label, model = model_path(progress)
         # Carte graphique d'abord ; si elle pose problème, processeur seul, puis moteur sans Vulkan.
-        attempts = [("vulkan", []), ("vulkan", ["-ngl", "0"]), ("cpu", [])]
-        for i, (kind, extra) in enumerate(attempts):
+        for i, (kind, extra) in enumerate(server_kinds()):
             exe = server_binary(kind, progress)
             progress(f"Chargement de l'IA {self.label}…" + (" (sans carte graphique)" if i else ""))
             if self._spawn(exe, model, extra):
@@ -247,13 +258,13 @@ class EmbeddedEngine:
 
     # -- génération -------------------------------------------------------------
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, schema: dict = CARD_SCHEMA) -> str:
         self.start(self.progress)
         payload = {
             "temperature": 0.2,
             "max_tokens": MAX_TOKENS,
             "response_format": {"type": "json_schema",
-                                "json_schema": {"name": "cartes", "strict": True, "schema": CARD_SCHEMA}},
+                                "json_schema": {"name": "reponse", "strict": True, "schema": schema}},
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions",
@@ -272,4 +283,6 @@ class EmbeddedEngine:
 
     def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
         self.progress = progress
-        return generate_cards(pdf, subject, progress, self.chat, "IA intégrée")
+        title, cards = generate_cards(pdf, subject, progress, self.chat, "IA intégrée")
+        distractors.add_to_drafts(cards, subject, self.chat, progress, "IA intégrée")
+        return title, cards

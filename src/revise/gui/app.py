@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QLibraryInfo, QTranslator
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
@@ -12,6 +13,7 @@ from revise import __version__
 from revise.db import Database
 from revise.gui import theme
 from revise.gui.cards_dialog import CardsDialog
+from revise.gui.common import confirm
 from revise.gui.courses import CoursesPage
 from revise.gui.import_page import ImportPage
 from revise.gui.learn_page import LearnPage
@@ -42,7 +44,7 @@ class MainWindow(QMainWindow):
         sl.setContentsMargins(0, 0, 0, 12)
         name = QLabel("revise")
         name.setObjectName("appname")
-        tag = QLabel("Tes CM en cartes\nde révision")
+        tag = QLabel("Tes cours en PDF,\nen cartes et en QCM")
         tag.setObjectName("tagline")
         sl.addWidget(name)
         sl.addWidget(tag)
@@ -56,16 +58,16 @@ class MainWindow(QMainWindow):
         self.import_page = ImportPage(db)
         self.stats = StatsPage(db)
         self.review = ReviewPage(db)
-        for i, (label, page) in enumerate((("Mes cours", self.courses), ("Apprendre", self.learn),
-                                           ("QCM", self.quiz), ("Importer", self.import_page),
-                                           ("Statistiques", self.stats))):
+        for page in (self.courses, self.learn, self.quiz, self.import_page, self.stats, self.review):
+            self.stack.addWidget(page)
+        # Ordre du menu = ordre dans lequel on s'en sert ; les identifiants restent les index des pages.
+        for label, i in (("Mes cours", self.COURSES), ("Ajouter un cours", self.IMPORT), ("Lire la fiche", self.LEARN),
+                         ("QCM", self.QUIZ), ("Mes progrès", self.STATS)):
             b = QPushButton(label)
             b.setObjectName("nav")
             b.setCheckable(True)
             self.nav.addButton(b, i)
             sl.addWidget(b)
-            self.stack.addWidget(page)
-        self.stack.addWidget(self.review)
         sl.addStretch(1)
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("tagline")
@@ -78,6 +80,8 @@ class MainWindow(QMainWindow):
         self.courses.start_review.connect(self.start_review)
         self.courses.edit_cards.connect(self.edit_cards)
         self.courses.go_import.connect(lambda: self.show_page(self.IMPORT))
+        self.courses.open_learn.connect(lambda ids: self.open_with(self.LEARN, ids))
+        self.courses.open_quiz.connect(lambda ids: self.open_with(self.QUIZ, ids))
         self.review.finished.connect(self.end_review)
         self.import_page.imported.connect(self.courses.refresh)
         self.show_page(self.COURSES if db.subjects() else self.IMPORT)
@@ -96,6 +100,13 @@ class MainWindow(QMainWindow):
         elif i == self.STATS:
             self.stats.refresh()
 
+    def open_with(self, i: int, deck_ids: list) -> None:
+        """Ouvre « Lire la fiche » ou « QCM » sur les cours cochés dans « Mes cours »."""
+        page = self.learn if i == self.LEARN else self.quiz
+        page.set_scope([int(d) for d in deck_ids])
+        self.nav.button(i).setChecked(True)
+        self.stack.setCurrentIndex(i)
+
     def start_review(self, deck_ids: list, exam: bool, include_known: bool, new_per_day: int) -> None:
         self.sidebar.setEnabled(False)
         self.stack.setCurrentWidget(self.review)
@@ -110,15 +121,15 @@ class MainWindow(QMainWindow):
         self.courses.refresh()
 
     def closeEvent(self, e) -> None:
-        if self.import_page.worker is not None:
-            from PySide6.QtWidgets import QMessageBox
-            if QMessageBox.question(self, "Import en cours",
-                                    "Un import est en cours. Quitter quand même ?\n"
-                                    "(les cours déjà terminés sont enregistrés)") != QMessageBox.StandardButton.Yes:
+        workers = [w for w in (self.import_page.worker, self.quiz.worker) if w is not None]
+        if workers:
+            if not confirm(self, "L'IA travaille encore", "L'IA est en train de travailler. Quitter quand même ?\n"
+                           "(ce qui est déjà terminé est enregistré)", "Quitter"):
                 e.ignore()
                 return
             import os
-            self.import_page.worker.stop_engine()
+            for w in workers:
+                w.stop_engine()
             self.db.close()
             os._exit(0)  # le PDF en cours est abandonné ; sa transaction n'est pas validée
         super().closeEvent(e)
@@ -132,7 +143,10 @@ def main(db: Database | None = None) -> int:
     font.setPointSizeF(11)
     app.setFont(font)
     app.setStyleSheet(theme.QSS)
-    app.setWindowIcon(QIcon.fromTheme("accessories-dictionary"))
+    app.setWindowIcon(theme.app_icon())
+    translator = QTranslator(app)  # textes de Qt lui-même (clic droit, fenêtre de choix de fichiers) en français
+    if translator.load("qtbase_fr", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(translator)
     win = MainWindow(db or Database())
     win.show()
     return app.exec()

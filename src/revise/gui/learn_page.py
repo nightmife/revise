@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QFrame, QListWidget, QPushButton, QSplitter, QVBoxLayout, QWidget
 
 from revise.db import Card, Database, deck_label
-from revise.gui.common import fill_scope_combo, muted, page_header, row
+from revise.gui.common import fill_scope_combo, muted, page_header, row, select_scope
 from revise.gui.review import markdown_view
 
 NO_SECTION = "Sans titre de partie"
@@ -40,11 +40,12 @@ class LearnPage(QWidget):
         self.db = db
         self.setObjectName("page")
         self.sections: list[tuple[str, list[Card]]] = []
+        self.custom: list[int] | None = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
-        lay.addWidget(page_header("Apprendre", "Ton cours en fiche de révision : lis chaque partie, réponses "
-                                               "visibles, avant de te tester en révision ou en QCM."))
+        lay.addWidget(page_header("Lire la fiche", "Ton cours résumé partie par partie, réponses visibles. "
+                                                   "Lis-le d'abord, teste-toi ensuite."))
         self.scope = QComboBox()
         self.scope.setMinimumWidth(420)
         self.scope.currentIndexChanged.connect(self._load)
@@ -75,7 +76,14 @@ class LearnPage(QWidget):
         lay.addLayout(row(self.prev_btn, self.position, None, self.next_btn))
 
     def refresh(self) -> None:
-        fill_scope_combo(self.scope, self.db)
+        fill_scope_combo(self.scope, self.db, self.custom)
+        self._load()
+
+    def set_scope(self, deck_ids: list[int]) -> None:
+        """Affiche la fiche de ces cours (ceux cochés dans « Mes cours »)."""
+        self.custom = deck_ids
+        fill_scope_combo(self.scope, self.db, self.custom)
+        select_scope(self.scope, deck_ids)
         self._load()
 
     def _load(self) -> None:
@@ -90,7 +98,7 @@ class LearnPage(QWidget):
         self.list.blockSignals(False)
         if not self.sections:
             self.info.setText("")
-            self.view.setMarkdown("Aucun cours pour l'instant : importe un PDF dans l'onglet « Importer »."
+            self.view.setMarkdown("Aucun cours pour l'instant : commence par « Ajouter un cours »."
                                   if self.scope.count() == 0 else "Ce cours n'a aucune carte.")
             self._update_nav()
             return

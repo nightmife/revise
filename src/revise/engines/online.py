@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from revise import config
-from revise.engines import Progress
+from revise.engines import Progress, distractors
 from revise.engines.prompt import generate_cards
 from revise.models import CardDraft, ReviseError
 
@@ -60,7 +60,8 @@ class OnlineEngine:
         self.conf = conf or settings()
         self.progress: Progress = lambda m: None
 
-    def chat(self, system: str, user: str) -> str:
+    def chat(self, system: str, user: str, schema: dict | None = None) -> str:
+        """`schema` est ignoré : ces services garantissent du JSON, pas un schéma précis."""
         c = self.conf
         payload = {
             "model": c["model"],
@@ -96,15 +97,21 @@ class OnlineEngine:
                 raise ReviseError("Réponse inattendue du service d'IA.") from e
         raise ReviseError("Le service d'IA est saturé : réessaie dans quelques minutes.")
 
-    def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
+    def check(self) -> None:
         c = self.conf
         if not c["key"]:
-            raise ReviseError("Aucune clé API enregistrée : ajoute-la avec le bouton « Clé API… » de l'onglet "
-                              "Importer (ou la commande « revise cle »).")
+            raise ReviseError("Aucune clé API enregistrée : ajoute-la avec le bouton « Configurer… » de l'onglet "
+                              "« Ajouter un cours » (ou la commande « revise cle »).")
         if not c["url"] or not c["model"]:
             raise ReviseError("Adresse ou modèle du service d'IA manquant dans les réglages de la clé API.")
+
+    def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
+        self.check()
         self.progress = progress
-        return generate_cards(pdf, subject, progress, self.chat, f"IA en ligne ({c['model']})")
+        label = f"IA en ligne ({self.conf['model']})"
+        title, cards = generate_cards(pdf, subject, progress, self.chat, label)
+        distractors.add_to_drafts(cards, subject, self.chat, progress, label)
+        return title, cards
 
 
 def _error_detail(e: urllib.error.HTTPError) -> str:
