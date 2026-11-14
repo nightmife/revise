@@ -14,11 +14,15 @@ from revise.gui import theme
 from revise.gui.cards_dialog import CardsDialog
 from revise.gui.courses import CoursesPage
 from revise.gui.import_page import ImportPage
+from revise.gui.learn_page import LearnPage
+from revise.gui.quiz_page import QuizPage
 from revise.gui.review import ReviewPage
 from revise.gui.stats_page import StatsPage
 
 
 class MainWindow(QMainWindow):
+    COURSES, LEARN, QUIZ, IMPORT, STATS = range(5)  # index des pages = identifiants des boutons
+
     def __init__(self, db: Database):
         super().__init__()
         self.db = db
@@ -33,7 +37,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar = QWidget()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(170)
+        self.sidebar.setFixedWidth(196)
         sl = QVBoxLayout(self.sidebar)
         sl.setContentsMargins(0, 0, 0, 12)
         name = QLabel("revise")
@@ -47,10 +51,13 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.courses = CoursesPage(db)
+        self.learn = LearnPage(db)
+        self.quiz = QuizPage(db)
         self.import_page = ImportPage(db)
         self.stats = StatsPage(db)
         self.review = ReviewPage(db)
-        for i, (label, page) in enumerate((("Mes cours", self.courses), ("Importer", self.import_page),
+        for i, (label, page) in enumerate((("Mes cours", self.courses), ("Apprendre", self.learn),
+                                           ("QCM", self.quiz), ("Importer", self.import_page),
                                            ("Statistiques", self.stats))):
             b = QPushButton(label)
             b.setObjectName("nav")
@@ -70,19 +77,23 @@ class MainWindow(QMainWindow):
 
         self.courses.start_review.connect(self.start_review)
         self.courses.edit_cards.connect(self.edit_cards)
-        self.courses.go_import.connect(lambda: self.show_page(1))
+        self.courses.go_import.connect(lambda: self.show_page(self.IMPORT))
         self.review.finished.connect(self.end_review)
         self.import_page.imported.connect(self.courses.refresh)
-        self.show_page(0 if db.subjects() else 1)
+        self.show_page(self.COURSES if db.subjects() else self.IMPORT)
 
     def show_page(self, i: int) -> None:
         self.nav.button(i).setChecked(True)
         self.stack.setCurrentIndex(i)
-        if i == 0:
+        if i == self.COURSES:
             self.courses.refresh()
-        elif i == 1:
+        elif i == self.LEARN:
+            self.learn.refresh()
+        elif i == self.QUIZ:
+            self.quiz.refresh()
+        elif i == self.IMPORT:
             self.import_page.refresh_subjects()
-        elif i == 2:
+        elif i == self.STATS:
             self.stats.refresh()
 
     def start_review(self, deck_ids: list, exam: bool, include_known: bool, new_per_day: int) -> None:
@@ -92,7 +103,7 @@ class MainWindow(QMainWindow):
 
     def end_review(self) -> None:
         self.sidebar.setEnabled(True)
-        self.show_page(0)
+        self.show_page(self.COURSES)
 
     def edit_cards(self, deck_id: int) -> None:
         CardsDialog(self.db, deck_id, self).exec()
@@ -107,6 +118,7 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
             import os
+            self.import_page.worker.stop_engine()
             self.db.close()
             os._exit(0)  # le PDF en cours est abandonné ; sa transaction n'est pas validée
         super().closeEvent(e)

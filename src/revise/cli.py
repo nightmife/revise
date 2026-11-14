@@ -22,23 +22,16 @@ err_console = Console(stderr=True)
 
 
 def pick_engine(name: str):
-    from revise.engines.claude import ClaudeEngine
-    from revise.engines.claude_code import ClaudeCodeEngine, claude_binary
+    from revise.engines.embedded import EmbeddedEngine
+    from revise.engines.online import OnlineEngine
     from revise.engines.simple import SimpleEngine
 
-    if name == "auto":
-        # On ne paie jamais sans l'avoir demandé : l'API facturée n'est utilisée qu'avec --moteur api.
-        if claude_binary():
-            return ClaudeCodeEngine()
-        console.print("[yellow]Claude Code introuvable : moteur sans IA.[/]")
-        return SimpleEngine()
-    return {"api": ClaudeEngine, "abonnement": ClaudeCodeEngine, "simple": SimpleEngine}[name]()
+    return {"auto": EmbeddedEngine, "ia": EmbeddedEngine, "en-ligne": OnlineEngine, "simple": SimpleEngine}[name]()
 
 
 # --------------------------------------------------------------- commandes ---
 
 def cmd_import(db: Database, args) -> int:
-    from revise.engines.claude import ClaudeEngine, format_estimate
     from revise.importer import guess_subject, import_pdf
 
     engine = pick_engine(args.moteur)
@@ -46,15 +39,13 @@ def cmd_import(db: Database, args) -> int:
     for raw in args.pdf:
         pdf = Path(raw).expanduser()
         subject = args.matiere or guess_subject(pdf)
-        if isinstance(engine, ClaudeEngine) and not args.oui:
-            with console.status(f"Estimation du coût pour {pdf.name}…"):
-                est = engine.estimate(pdf, subject)
-            console.print(format_estimate(est))
-            if not Confirm.ask("Générer les cartes ?", default=True):
-                continue
-        with console.status(f"{pdf.name}…") as status:
-            res = import_pdf(db, engine, pdf, subject, lambda m: status.update(f"{pdf.name} : {m}"),
-                             title=args.titre if len(args.pdf) == 1 else None, force=args.forcer)
+        try:
+            with console.status(f"{pdf.name}…") as status:
+                res = import_pdf(db, engine, pdf, subject, lambda m: status.update(f"{pdf.name} : {m}"),
+                                 title=args.titre if len(args.pdf) == 1 else None, force=args.forcer)
+        except BaseException:
+            getattr(engine, "close", lambda: None)()
+            raise
         if res.skipped:
             console.print(f"[yellow]{pdf.name} déjà importé[/] (paquet {res.deck_id}). --forcer pour réimporter.")
             continue
@@ -64,20 +55,28 @@ def cmd_import(db: Database, args) -> int:
         for c in res.cards[:3]:
             console.print(Panel(Markdown(f"{c.question}\n\n---\n\n{c.answer}"), title=f"exemple · p. {c.page or '?'}",
                                 title_align="left", border_style="grey50", expand=False, width=90))
+    getattr(engine, "close", lambda: None)()
     if total:
         console.print("\nC'est parti : [bold]revise reviser[/]  (ou [bold]revise editer N[/] pour retoucher les cartes)")
     return 0
 
 
-def cmd_estimate(db: Database, args) -> int:
-    from revise.engines.claude import ClaudeEngine, format_estimate
+def cmd_key(db: Database, args) -> int:
+    from revise import config
+    from revise.engines.online import PROVIDERS, settings
 
-    engine = ClaudeEngine()
-    for raw in args.pdf:
-        pdf = Path(raw).expanduser()
-        with console.status(f"Estimation pour {pdf.name}…"):
-            est = engine.estimate(pdf, args.matiere or pdf.resolve().parent.name)
-        console.print(f"{pdf.name} : {format_estimate(est)}")
+    values = {k: v for k, v in (("online_provider", args.fournisseur), ("online_key", args.cle),
+                                ("online_model", args.modele), ("online_url", args.url)) if v is not None}
+    if args.fournisseur:  # changer de fournisseur remet son adresse et son modèle par défaut
+        values.setdefault("online_model", "")
+        values.setdefault("online_url", "")
+    if values:
+        config.save(values)
+    s = settings()
+    console.print(f"Service : [bold]{PROVIDERS[s['provider']][0]}[/]  ({s['url'] or 'adresse à préciser avec --url'})")
+    console.print(f"Modèle : {s['model'] or 'à préciser avec --modele'}")
+    console.print("Clé : " + ("enregistrée" if s["key"] else f"[yellow]aucune[/] — crée-la sur "
+                                                              f"{PROVIDERS[s['provider']][3] or 'le site du service'}"))
     return 0
 
 
@@ -126,6 +125,8 @@ def cmd_review(db: Database, args) -> int:
 
 def has_display() -> bool:
     import os
+    if os.name == "nt" or sys.platform == "darwin":
+        return True
     return bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY"))
 
 
@@ -241,18 +242,19 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("importer", aliases=["import"], help="créer des cartes à partir de PDF")
     s.add_argument("pdf", nargs="+")
     s.add_argument("-m", "--matiere", help="matière (défaut : nom du dossier du PDF)")
-    s.add_argument("--moteur", choices=["auto", "abonnement", "api", "simple"], default="auto",
-                   help="abonnement = Claude Code avec ton abonnement (défaut si installé), "
-                        "api = API Claude facturée à l'usage, simple = sans IA")
+    s.add_argument("--moteur", choices=["auto", "ia", "en-ligne", "simple"], default="auto",
+                   help="ia = IA intégrée, gratuite et hors ligne (défaut ; téléchargée au premier import), "
+                        "en-ligne = IA en ligne avec ta clé API gratuite (voir « revise cle »), simple = sans IA")
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
-    s.add_argument("--oui", action="store_true", help="ne pas demander de confirmation (coût)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")
     s.set_defaults(func=cmd_import)
 
-    s = sub.add_parser("estimer", help="estimer le coût d'un import avec Claude")
-    s.add_argument("pdf", nargs="+")
-    s.add_argument("-m", "--matiere")
-    s.set_defaults(func=cmd_estimate)
+    s = sub.add_parser("cle", help="enregistrer la clé API de l'IA en ligne")
+    s.add_argument("--fournisseur", choices=["groq", "gemini", "autre"])
+    s.add_argument("--cle", help="la clé API")
+    s.add_argument("--modele", help="nom du modèle (défaut : celui conseillé pour le fournisseur)")
+    s.add_argument("--url", help="adresse de l'API (fournisseur « autre »)")
+    s.set_defaults(func=cmd_key)
 
     s = sub.add_parser("reviser", aliases=["r"], help="lancer une séance de révision")
     s.add_argument("-m", "--matiere")
@@ -260,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-c", "--cours", nargs="+", metavar="COURS",
                    help="seulement ces cours : numéros (revise liste) ou morceaux de titre, ex. --cours CM8 CM9")
     s.add_argument("-e", "--examen", action="store_true",
-                   help="bachotage : toutes les cartes tout de suite, jusqu'à les savoir toutes")
+                   help="bachotage : toutes les cartes tout de suite, dans un ordre aléatoire, jusqu'à les savoir toutes")
     s.set_defaults(func=cmd_review)
 
     s = sub.add_parser("app", help="ouvrir l'application graphique (par défaut si on tape juste « revise »)")

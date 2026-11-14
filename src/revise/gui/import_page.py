@@ -5,12 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtWidgets import (QButtonGroup, QComboBox, QFileDialog, QListWidget, QListWidgetItem, QMessageBox,
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QFileDialog, QListWidget, QListWidgetItem, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget,
                                QApplication)
 
+from revise import config
 from revise.db import Database, file_sha256
-from revise.engines.claude_code import claude_binary
+from revise.engines import online
 from revise.gui.common import muted, page_header, row
 from revise.importer import guess_subject, import_pdf
 from revise.models import ReviseError
@@ -20,11 +21,67 @@ AUTO_SUBJECT = "Automatique (d'après le nom du fichier)"
 SEARCH_DIRS = ["Downloads", "Téléchargements", "Documents"]
 
 
+ENGINES = ("ia", "en-ligne", "simple")  # dans l'ordre des boutons radio
+
+
 def make_engine(name: str):
-    from revise.engines.claude import ClaudeEngine
-    from revise.engines.claude_code import ClaudeCodeEngine
+    from revise.engines.embedded import EmbeddedEngine
     from revise.engines.simple import SimpleEngine
-    return {"abonnement": ClaudeCodeEngine, "api": ClaudeEngine, "simple": SimpleEngine}[name]()
+    return {"ia": EmbeddedEngine, "en-ligne": online.OnlineEngine, "simple": SimpleEngine}[name]()
+
+
+class KeyDialog(QDialog):
+    """Réglages de l'IA en ligne : service, clé API, modèle."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Clé API de l'IA en ligne")
+        self.resize(620, 300)
+        form = QFormLayout(self)
+        self.provider = QComboBox()
+        for key, (label, *_rest) in online.PROVIDERS.items():
+            self.provider.addItem(label, key)
+        self.link = QLabel()
+        self.link.setOpenExternalLinks(True)
+        self.link.setWordWrap(True)
+        self.key = QLineEdit()
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setPlaceholderText("colle ta clé ici")
+        self.model = QLineEdit()
+        self.url = QLineEdit()
+        form.addRow("Service :", self.provider)
+        form.addRow("", self.link)
+        form.addRow("Clé API :", self.key)
+        form.addRow("Modèle :", self.model)
+        form.addRow("Adresse :", self.url)
+        form.addRow(muted("La clé reste sur cet ordinateur. Le texte de tes cours est envoyé au service choisi."))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+        current = online.settings()
+        self.provider.setCurrentIndex(max(0, self.provider.findData(current["provider"])))
+        self.key.setText(config.load().get("online_key", ""))
+        self._provider_changed()
+        self.model.setText(current["model"])
+        self.url.setText(current["url"])
+        self.provider.currentIndexChanged.connect(self._provider_changed)
+
+    def _provider_changed(self) -> None:
+        _, url, model, page = online.PROVIDERS[self.provider.currentData()]
+        self.model.setText(model)
+        self.url.setText(url)
+        self.link.setText(f"Crée une clé gratuite ici : <a href='{page}' style='color:#8aa3ff'>{page}</a>" if page
+                          else "Indique l'adresse de l'API (elle finit souvent par /v1) et le nom du modèle.")
+
+    def _save(self) -> None:
+        if not self.key.text().strip():
+            QMessageBox.warning(self, "Clé API", "Colle ta clé API avant d'enregistrer.")
+            return
+        config.save({"online_provider": self.provider.currentData(), "online_key": self.key.text().strip(),
+                     "online_model": self.model.text().strip(), "online_url": self.url.text().strip()})
+        self.accept()
 
 
 class ImportWorker(QObject):
@@ -38,10 +95,11 @@ class ImportWorker(QObject):
         super().__init__()
         self.db_path, self.pdfs, self.subject, self.engine_name = db_path, pdfs, subject, engine_name
         self.cancelled = False
+        self.engine = None
 
     def run(self) -> None:
         db = Database(self.db_path)
-        engine = make_engine(self.engine_name)
+        engine = self.engine = make_engine(self.engine_name)
         imported = 0
         try:
             for pdf in self.pdfs:
@@ -59,8 +117,14 @@ class ImportWorker(QObject):
                 except Exception as e:  # on ne laisse pas un PDF bizarre tuer tout l'import
                     self.file_done.emit(pdf.name, f"erreur inattendue : {e}", False)
         finally:
+            self.stop_engine()
             db.close()
             self.all_done.emit(imported)
+
+
+    def stop_engine(self) -> None:
+        """Arrête l'IA intégrée si elle tourne (sans effet pour les autres moteurs)."""
+        getattr(self.engine, "close", lambda: None)()
 
 
 class ImportPage(QWidget):
@@ -94,18 +158,26 @@ class ImportPage(QWidget):
         lay.addLayout(row(muted("Matière :"), self.subject, None))
 
         self.engine_group = QButtonGroup(self)
-        self.r_sub = QRadioButton("Claude, avec ton abonnement — recommandé (lit aussi les schémas et le code)")
-        self.r_simple = QRadioButton("Sans IA — gratuit et hors ligne, cartes à retoucher")
-        self.r_api = QRadioButton("API Claude — payant à l'usage (clé ANTHROPIC_API_KEY)")
-        for i, r in enumerate((self.r_sub, self.r_simple, self.r_api)):
+        self.r_ia = QRadioButton("IA intégrée — gratuite, hors ligne, rien à installer")
+        self.r_ia.setToolTip("Le modèle (2,5 à 7 Go selon la mémoire de l'ordinateur) est téléchargé une seule fois, "
+                             "au premier import.")
+        self.r_online = QRadioButton("IA en ligne — rapide, avec ta clé API gratuite (Internet nécessaire)")
+        self.r_simple = QRadioButton("Sans IA — instantané, cartes à retoucher")
+        key_btn = QPushButton("Clé API…")
+        key_btn.clicked.connect(self.edit_key)
+        self.key_state = muted("")
+        for i, r in enumerate((self.r_ia, self.r_online, self.r_simple)):
             self.engine_group.addButton(r, i)
-            lay.addWidget(r)
-        if claude_binary():
-            self.r_sub.setChecked(True)
-        else:
-            self.r_sub.setEnabled(False)
-            self.r_sub.setText(self.r_sub.text() + "  (Claude Code introuvable)")
-            self.r_simple.setChecked(True)
+            if r is self.r_online:
+                lay.addLayout(row(r, key_btn, self.key_state, None))
+            elif r is self.r_ia:
+                lay.addLayout(row(r, muted("modèle téléchargé au premier import (2,5 à 7 Go), "
+                                           "plusieurs minutes par cours"), None))
+            else:
+                lay.addWidget(r)
+        saved = config.load().get("engine")
+        self.engine_group.button(ENGINES.index(saved) if saved in ENGINES else 0).setChecked(True)
+        self._update_key_state()
 
         self.import_btn = QPushButton("Importer la sélection")
         self.import_btn.setObjectName("primary")
@@ -212,7 +284,19 @@ class ImportPage(QWidget):
 
     # --------------------------------------------------------------- import
     def engine_name(self) -> str:
-        return {0: "abonnement", 1: "simple", 2: "api"}[self.engine_group.checkedId()]
+        return ENGINES[self.engine_group.checkedId()]
+
+    def _update_key_state(self) -> None:
+        conf = online.settings()
+        self.key_state.setText(f"clé enregistrée ({online.PROVIDERS[conf['provider']][0]})" if conf["key"]
+                               else "aucune clé enregistrée")
+
+    def edit_key(self) -> bool:
+        ok = KeyDialog(self).exec() == QDialog.DialogCode.Accepted
+        self._update_key_state()
+        if ok:
+            self.r_online.setChecked(True)
+        return ok
 
     def start(self) -> None:
         pdfs = self.selected_paths()
@@ -221,8 +305,9 @@ class ImportPage(QWidget):
         subject = self.subject.currentText().strip()
         subject = None if (not subject or subject == AUTO_SUBJECT) else subject
         engine = self.engine_name()
-        if engine == "api" and not self._confirm_api_cost(pdfs, subject):
+        if engine == "en-ligne" and not online.settings()["key"] and not self.edit_key():
             return
+        config.save({"engine": engine})
         self.progress.setRange(0, len(pdfs))
         self.progress.setValue(0)
         for w in (self.progress, self.log, self.cancel_btn):
@@ -239,22 +324,6 @@ class ImportPage(QWidget):
         self.worker.file_done.connect(self._file_done)
         self.worker.all_done.connect(self._all_done)
         self._thread.start()
-
-    def _confirm_api_cost(self, pdfs: list[Path], subject: str | None) -> bool:
-        from revise.engines.claude import ClaudeEngine
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            eng = ClaudeEngine()
-            total = 0.0
-            for p in pdfs:
-                total += eng.estimate(p, subject or guess_subject(p)).dollars
-        except ReviseError as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "API Claude", str(e))
-            return False
-        QApplication.restoreOverrideCursor()
-        return QMessageBox.question(self, "Coût estimé", f"Coût estimé : environ {total:.2f} $ "
-                                    f"pour {len(pdfs)} PDF. Continuer ?") == QMessageBox.StandardButton.Yes
 
     def cancel(self) -> None:
         if self.worker:

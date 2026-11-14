@@ -9,6 +9,15 @@ from pypdf import PdfWriter
 from revise.db import Database
 
 
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path: Path, monkeypatch):
+    """Les tests ne lisent ni n'écrivent les réglages et les données de l'utilisateur."""
+    monkeypatch.setenv("REVISE_CONFIG", str(tmp_path / "config.json"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    for var in ("REVISE_CLE_API", "REVISE_IA_MODELE", "REVISE_DB"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
     d = Database(tmp_path / "test.db")

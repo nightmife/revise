@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -85,7 +86,7 @@ class Session:
     Mode normal : cartes dues d'abord, puis nouvelles cartes (dans la limite du jour) ;
     les cartes ratées ou en apprentissage reviennent tant qu'elles sont dues dans la séance.
 
-    Mode examen (`cram`) : toutes les cartes des cours choisis, dans l'ordre du cours, sans
+    Mode examen (`cram`) : toutes les cartes des cours choisis, dans un ordre aléatoire, sans
     limite ni échéance ; une carte notée « À revoir » ou « Difficile » repasse en fin de file,
     jusqu'à ce que chacune ait été notée « Bien » ou « Facile ». Les réponses sont enregistrées
     normalement : FSRS en tient compte pour la suite."""
@@ -119,6 +120,7 @@ class Session:
                     else:
                         kept.append(c)
                 cards = kept
+            random.shuffle(cards)
             self.queue = cards
             return
         due = self.db.due_cards(now + LEARN_AHEAD, self.subject, self.deck_ids)

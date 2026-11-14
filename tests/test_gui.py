@@ -61,8 +61,51 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     assert win.stack.currentWidget() is win.courses
     assert win.courses.tree.topLevelItem(0).child(0).text(4) == "2"   # 2 cartes sues
 
-    win.show_page(2)
+    win.show_page(win.STATS)
     win.grab().save(str(tmp_path / "stats.png"))
-    win.show_page(1)
+    win.show_page(win.IMPORT)
     assert (tmp_path / "revision.png").stat().st_size > 1000
+    win.close()
+
+
+def test_quiz_and_learn_pages(qapp, db, tmp_path):
+    drafts = [CardDraft("qa", f"Question {i} ?", f"Réponse {i}", i + 1, "Partie A" if i < 3 else "Partie B")
+              for i in range(5)]
+    drafts.append(CardDraft("cloze", "Une pile est une structure [...].", "LIFO", 6, "Partie B"))
+    db.add_deck("Algo", "CM1", None, None, "simple", drafts)
+    win = MainWindow(db)
+    win.show()
+    qapp.processEvents()
+
+    win.show_page(win.LEARN)
+    learn = win.learn
+    assert win.stack.currentWidget() is learn and learn.list.count() == 2
+    assert "Question 0" in learn.view.toPlainText() and not learn.prev_btn.isEnabled()
+    learn.next_btn.click()
+    assert "Une pile est une structure LIFO." in learn.view.toPlainText() and not learn.next_btn.isEnabled()
+    win.grab().save(str(tmp_path / "learn.png"))
+
+    win.show_page(win.QUIZ)
+    quiz = win.quiz
+    assert quiz.start_btn.isEnabled()
+    quiz.count.setValue(3)
+    quiz.start_btn.click()
+    assert quiz.pages.currentIndex() == 1 and len(quiz.questions) == 3
+    q = quiz.questions[0]
+    quiz.choices[q.correct].click()
+    quiz.choices[(q.correct + 1) % 4].click()            # déjà répondu : ignoré
+    assert quiz.score == 1 and quiz.next_btn.isVisible()
+    qapp.processEvents()
+    win.grab().save(str(tmp_path / "quiz.png"))
+    quiz.next_btn.click()
+    q = quiz.questions[1]
+    quiz.choices[(q.correct + 1) % 4].click()
+    assert quiz.score == 1 and len(quiz.mistakes) == 1
+    quiz.next_btn.click()
+    quiz.choices[quiz.questions[2].correct].click()
+    quiz.next_btn.click()
+    assert quiz.pages.currentIndex() == 2 and quiz.result.text() == "2 / 3" and quiz.retry_btn.isVisible()
+    quiz.retry_btn.click()
+    assert quiz.pages.currentIndex() == 1 and len(quiz.questions) == 1
+    assert db.cards()[0].fsrs is None                     # le QCM ne touche pas au planning
     win.close()

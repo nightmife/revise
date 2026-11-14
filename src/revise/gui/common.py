@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from revise.db import Database, deck_label
 
 
 def page_header(title: str, subtitle: str = "") -> QWidget:
@@ -38,3 +40,29 @@ def muted(text: str) -> QLabel:
     lab.setObjectName("muted")
     lab.setWordWrap(True)
     return lab
+
+
+def fill_scope_combo(combo: QComboBox, db: Database) -> None:
+    """Liste « tous les cours », puis chaque matière et ses cours. La donnée de chaque
+    entrée est la liste des identifiants de cours concernés. La sélection est conservée."""
+    previous = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+    every = [d.id for d in db.decks()]
+    if every:
+        combo.addItem("Tous les cours", every)
+    for subject in db.subjects():
+        decks = db.decks(subject)
+        combo.addItem(f"{subject} — toute la matière", [d.id for d in decks])
+        for d in decks:
+            combo.addItem(f"    {deck_label(d)}", [d.id])
+    if previous is not None:
+        i = combo.findData(previous)
+        if i >= 0:
+            combo.setCurrentIndex(i)
+    combo.blockSignals(False)
+
+
+def cloze_question(question: str) -> str:
+    """Met en évidence le trou d'une carte « texte à trous »."""
+    return question.replace("[...]", "**[ … ]**").replace("[…]", "**[ … ]**")

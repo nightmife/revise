@@ -173,14 +173,14 @@ class ReviewPage(QWidget):
             known = self.total - s.remaining
             self.progress.setValue(known)
             skipped = f" · {s.known_skipped} déjà sues sautées" if s.known_skipped else ""
-            html = (f"<b>MODE EXAMEN</b> &nbsp; <span style='color:#0ca30c'>{known} / {self.total} sues</span>"
-                    f" &nbsp; <span style='color:#86b6ef'>{new} jamais vues</span>"
-                    f" &nbsp; <span style='color:#fab219'>{learning} à revoir</span>"
+            html = (f"<b>MODE EXAMEN</b> &nbsp; <span style='color:{theme.GOOD}'>{known} / {self.total} sues</span>"
+                    f" &nbsp; <span style='color:{theme.ACCENT_HOVER}'>{new} jamais vues</span>"
+                    f" &nbsp; <span style='color:{theme.WARN}'>{learning} à revoir</span>"
                     f" &nbsp; <span style='color:{theme.MUTED}'>{s.done} réponses{skipped}</span>")
         else:
-            html = (f"<span style='color:#86b6ef'>{new} nouvelles</span> &nbsp; "
-                    f"<span style='color:#fab219'>{learning} en apprentissage</span> &nbsp; "
-                    f"<span style='color:#0ca30c'>{review} à réviser</span> &nbsp; "
+            html = (f"<span style='color:{theme.ACCENT_HOVER}'>{new} nouvelles</span> &nbsp; "
+                    f"<span style='color:{theme.WARN}'>{learning} en apprentissage</span> &nbsp; "
+                    f"<span style='color:{theme.GOOD}'>{review} à réviser</span> &nbsp; "
                     f"<span style='color:{theme.MUTED}'>{s.done} faites</span>")
         self.counts.setText(html)
 

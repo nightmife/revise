@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from revise.config import data_dir
 from revise.models import CardDraft
 
 SCHEMA = """
@@ -64,8 +65,7 @@ def parse_iso(s: str) -> datetime:
 def default_path() -> Path:
     if env := os.environ.get("REVISE_DB"):
         return Path(env)
-    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return base / "revise" / "revise.db"
+    return data_dir() / "revise.db"
 
 
 def file_sha256(path: Path) -> str:

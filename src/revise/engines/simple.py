@@ -186,7 +186,7 @@ class SimpleEngine:
         if not any(t.strip() for t in texts):
             from revise.models import ReviseError
             raise ReviseError("Aucun texte dans ce PDF (diapositives scannées ?). "
-                              "Le moteur sans IA ne lit que le texte : essaie --moteur claude.")
+                              "L'application ne lit que le texte des PDF.")
         cards: list[CardDraft] = []
         seen: set[str] = set()
         for n, text in enumerate(texts, start=1):
