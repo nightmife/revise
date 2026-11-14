@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (50), GUI en offscreen
+.venv/bin/pytest -q                              # tests (51), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -55,4 +55,5 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - L'IA intégrée et l'IA en ligne n'ont jamais tourné pour de vrai (seulement avec des faux serveurs dans les tests) ;
   la qualité réelle des réponses pièges n'a donc pas été jugée.
 - La version Mac (build GitHub Actions, .dmg, IA intégrée) n'a jamais été lancée sur un vrai Mac.
-- Les noms de modèles par défaut de `online.PROVIDERS` peuvent être périmés.
+- Les noms de modèles par défaut de `online.PROVIDERS` peuvent être périmés : si le service refuse le modèle,
+  `OnlineEngine._replace_model` en choisit un dans la liste du service (`pick_model`) et l'enregistre.

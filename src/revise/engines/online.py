@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -28,12 +29,34 @@ TIMEOUT = 300
 MAX_RETRIES = 6
 
 Post = Callable[[str, dict, dict, float], dict]
+Get = Callable[[str, dict, float], dict]
+
+# Modèles qui ne servent pas à écrire du texte (voix, images, filtres…).
+NOT_CHAT = ("whisper", "tts", "guard", "embed", "image", "imagen", "audio", "live", "speech", "veo", "compound",
+            "orpheus", "aqa", "robotics", "computer-use", "lite")
+# Par service, morceaux de nom des modèles à préférer, du meilleur au moins bon.
+PREFERRED = {"groq": ("gpt-oss-120b", "llama-3.3-70b", "qwen", "gpt-oss", "llama"), "gemini": ("flash", "pro")}
 
 
 def http_post(url: str, headers: dict, payload: dict, timeout: float) -> dict:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers=headers)
     with net.urlopen(req, timeout) as resp:
         return json.loads(resp.read().decode())
+
+
+def http_get(url: str, headers: dict, timeout: float) -> dict:
+    with net.urlopen(urllib.request.Request(url, headers=headers), timeout) as resp:
+        return json.loads(resp.read().decode())
+
+
+def pick_model(ids: list[str], provider: str) -> str:
+    """Choisit un modèle de texte parmi ceux que le service propose à cette clé ("" si aucun)."""
+    usable = sorted(i.removeprefix("models/") for i in ids if not any(w in i.lower() for w in NOT_CHAT))
+    for wanted in PREFERRED.get(provider, ()):
+        found = [m for m in usable if wanted in m.lower()]
+        if found:
+            return found[-1]  # le dernier dans l'ordre alphabétique : en général la version la plus récente
+    return usable[0] if usable else ""
 
 
 def settings() -> dict:
@@ -54,8 +77,11 @@ def settings() -> dict:
 class OnlineEngine:
     name = "en-ligne"
 
-    def __init__(self, post: Post = http_post, sleep: Callable[[float], None] = time.sleep, conf: dict | None = None):
+    def __init__(self, post: Post = http_post, sleep: Callable[[float], None] = time.sleep, conf: dict | None = None,
+                 get: Get = http_get):
         self.post = post
+        self.get = get
+        self.replaced_model = False
         self.sleep = sleep
         self.conf = conf or settings()
         self.progress: Progress = lambda m: None
@@ -71,25 +97,40 @@ class OnlineEngine:
         }
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {c['key']}", "User-Agent": "revise"}
         for attempt in range(MAX_RETRIES):
+            payload["model"] = c["model"]
             try:
                 data = self.post(c["url"] + "/chat/completions", headers, payload, TIMEOUT)
                 return data["choices"][0]["message"]["content"] or ""
             except urllib.error.HTTPError as e:
                 detail = _error_detail(e)
                 if e.code in (429, 503) and attempt < MAX_RETRIES - 1:
+                    if re.search(r"limit:\s*0\b", detail):  # aucun quota : attendre ne sert à rien
+                        raise ReviseError(
+                            f"Ce service n'accorde aucune utilisation gratuite à ta clé pour le modèle "
+                            f"« {c['model']} » (fréquent avec Gemini en Europe). Choisis le service Groq dans "
+                            f"« Configurer… », ou utilise l'IA de cet ordinateur. Détail : {detail}") from e
                     try:
                         wait = float(e.headers.get("Retry-After", ""))
                     except (TypeError, ValueError):
                         wait = 15.0 * (attempt + 1)
                     wait = min(max(wait, 1.0), 120.0)
-                    self.progress(f"limite du service atteinte, nouvelle tentative dans {round(wait)} s…")
+                    self.progress(f"limite du service atteinte, nouvelle tentative dans {round(wait)} s… "
+                                  f"{detail[:160]}".strip())
                     self.sleep(wait)
                     continue
+                if e.code in (429, 503):
+                    raise ReviseError(f"Le service d'IA refuse toujours après plusieurs essais ({e.code}) : quota "
+                                      f"gratuit épuisé ou service saturé. Réessaie plus tard, change de service dans "
+                                      f"« Configurer… », ou utilise l'IA de cet ordinateur. Détail : {detail}") from e
                 if e.code in (401, 403):
                     raise ReviseError(f"Clé API refusée par le service ({e.code}). Vérifie la clé. {detail}") from e
-                if e.code == 404:
+                unknown = e.code == 404 or (e.code == 400 and re.search(
+                    r"decommission|not found|does not exist|no longer|not supported|unknown model", detail, re.I))
+                if unknown and not self.replaced_model and self._replace_model():
+                    continue
+                if unknown:
                     raise ReviseError(f"Modèle « {c['model']} » ou adresse inconnus du service : change le modèle "
-                                      f"dans les réglages de la clé API. {detail}") from e
+                                      f"dans les réglages avancés de « Configurer… ». {detail}") from e
                 raise ReviseError(f"Le service d'IA a répondu une erreur ({e.code}). {detail}") from e
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
                 raise ReviseError(f"Impossible de joindre le service d'IA ({c['url']}) : vérifie ta connexion. "
@@ -97,6 +138,24 @@ class OnlineEngine:
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 raise ReviseError("Réponse inattendue du service d'IA.") from e
         raise ReviseError("Le service d'IA est saturé : réessaie dans quelques minutes.")
+
+    def _replace_model(self) -> bool:
+        """Le modèle réglé n'existe plus chez le service : on prend un de ceux qu'il propose aujourd'hui."""
+        self.replaced_model = True
+        c = self.conf
+        try:
+            listing = self.get(c["url"] + "/models", {"Authorization": f"Bearer {c['key']}", "User-Agent": "revise"},
+                               60)
+            ids = [str(m.get("id") or "") for m in listing.get("data", []) if isinstance(m, dict)]
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError, AttributeError):
+            return False
+        model = pick_model(ids, c["provider"])
+        if not model or model == c["model"]:
+            return False
+        self.progress(f"le modèle « {c['model']} » n'existe plus, utilisation de « {model} »")
+        c["model"] = model
+        config.save({"online_model": model})
+        return True
 
     def check(self) -> None:
         c = self.conf

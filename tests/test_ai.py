@@ -125,13 +125,46 @@ def test_online_errors(pdf, monkeypatch):
         raise http_error(404, [{"error": {"message": "model not found"}}])
 
     with pytest.raises(ReviseError, match="Modèle.*model not found"):
-        OnlineEngine(unknown).generate(pdf, "Algo", lambda m: None)
+        OnlineEngine(unknown, get=lambda *a: {"data": []}).generate(pdf, "Algo", lambda m: None)
 
     def down(*a):
         raise urllib.error.URLError("pas de réseau")
 
     with pytest.raises(ReviseError, match="connexion"):
         OnlineEngine(down).generate(pdf, "Algo", lambda m: None)
+
+
+def test_online_replaces_a_retired_model_and_explains_missing_quota(pdf):
+    config.save({"online_provider": "groq", "online_key": "k"})
+    calls = []
+
+    def post(url, headers, payload, timeout):
+        calls.append(payload["model"])
+        if payload["model"] == "llama-3.3-70b-versatile":
+            raise http_error(400, {"error": {"message": "The model has been decommissioned"}})
+        return {"choices": [{"message": {"content": reply(
+            card("Qu'est-ce qu'une file ?", "Une structure FIFO : enfiler et défiler en temps constant.", 3))}}]}
+
+    def get(url, headers, timeout):
+        assert url == "https://api.groq.com/openai/v1/models" and headers["Authorization"] == "Bearer k"
+        return {"data": [{"id": i} for i in ("whisper-large-v3", "openai/gpt-oss-20b", "openai/gpt-oss-120b",
+                                             "meta-llama/llama-guard-4-12b")]}
+
+    msgs = []
+    _, cards = OnlineEngine(post, lambda s: None, get=get).generate(pdf, "Algo", msgs.append)
+    assert len(cards) == 1 and calls[:2] == ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"]
+    assert online.settings()["model"] == "openai/gpt-oss-120b" and any("n'existe plus" in m for m in msgs)
+    assert online.pick_model(["models/gemini-2.5-flash-lite", "models/gemini-2.5-flash", "models/gemini-3-flash",
+                              "models/gemini-embedding-001"], "gemini") == "gemini-3-flash"
+    assert online.pick_model(["whisper-large-v3"], "groq") == ""
+
+    def no_quota(*a):
+        raise http_error(429, {"error": {"message": "Quota exceeded for metric free_tier_requests, limit: 0"}})
+
+    waits = []
+    with pytest.raises(ReviseError, match="aucune utilisation gratuite.*limit: 0"):
+        OnlineEngine(no_quota, waits.append).generate(pdf, "Algo", lambda m: None)
+    assert waits == []                                   # pas d'attente inutile
 
 
 def test_cle_command(tmp_path, capsys):
