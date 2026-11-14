@@ -207,6 +207,13 @@ def test_download_resumes(tmp_path):
         embedded.download("http://x/m", tmp_path / "ia" / "autre.gguf", msgs.append, "l'IA", len(data), offline)
 
 
+def test_https_uses_bundled_certificates():
+    from revise import net
+
+    assert net.ssl_context().cert_store_stats()["x509_ca"] > 50
+    assert net.reason(urllib.error.URLError("certificat refusé")) == "certificat refusé"
+
+
 # ---------------------------------------------------------- réponses pièges ---
 
 def test_distractors_parse_and_clean():

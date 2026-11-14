@@ -23,7 +23,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from revise import config
+from revise import config, net
 from revise.engines import Progress, distractors
 from revise.engines.prompt import CARD_SCHEMA, generate_cards
 from revise.models import CardDraft, ReviseError
@@ -96,7 +96,7 @@ def server_asset(kind: str, platform: str | None = None, machine: str | None = N
 
 
 def download(url: str, dest: Path, progress: Progress, label: str, expected: int | None = None,
-             opener=urllib.request.urlopen) -> Path:
+             opener=net.urlopen) -> Path:
     """Télécharge `url` dans `dest`, en reprenant un téléchargement interrompu."""
     if dest.exists() and (expected is None or dest.stat().st_size == expected):
         return dest
@@ -129,7 +129,7 @@ def download(url: str, dest: Path, progress: Progress, label: str, expected: int
                             last = pct
                             progress(f"Téléchargement de {label} : {pct} % de {total / 1e9:.2f} Go (une seule fois)")
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-            raise ReviseError(f"Téléchargement de {label} interrompu ({e}). Vérifie ta connexion et relance "
+            raise ReviseError(f"Téléchargement de {label} interrompu ({net.reason(e)}). Vérifie ta connexion et relance "
                               "l'import : il reprendra où il s'est arrêté.") from e
     if expected is not None and part.stat().st_size != expected:
         if part.stat().st_size > expected:

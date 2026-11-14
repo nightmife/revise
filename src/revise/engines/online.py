@@ -12,7 +12,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-from revise import config
+from revise import config, net
 from revise.engines import Progress, distractors
 from revise.engines.prompt import generate_cards
 from revise.models import CardDraft, ReviseError
@@ -32,7 +32,7 @@ Post = Callable[[str, dict, dict, float], dict]
 
 def http_post(url: str, headers: dict, payload: dict, timeout: float) -> dict:
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with net.urlopen(req, timeout) as resp:
         return json.loads(resp.read().decode())
 
 
@@ -92,7 +92,8 @@ class OnlineEngine:
                                       f"dans les réglages de la clé API. {detail}") from e
                 raise ReviseError(f"Le service d'IA a répondu une erreur ({e.code}). {detail}") from e
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                raise ReviseError(f"Impossible de joindre le service d'IA ({c['url']}) : vérifie ta connexion.") from e
+                raise ReviseError(f"Impossible de joindre le service d'IA ({c['url']}) : vérifie ta connexion. "
+                                  f"Détail : {net.reason(e)}") from e
             except (KeyError, IndexError, TypeError, ValueError) as e:
                 raise ReviseError("Réponse inattendue du service d'IA.") from e
         raise ReviseError("Le service d'IA est saturé : réessaie dans quelques minutes.")

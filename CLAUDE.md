@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (49), GUI en offscreen
+.venv/bin/pytest -q                              # tests (50), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -23,6 +23,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `models.py` | `CardDraft` (kind qa/cloze/code, question, answer, page, section, distractors), `ReviseError` (message affiché tel quel) |
 | `config.py` | `data_dir()` (`~/.local/share/revise` ; Mac : `~/Library/Application Support/revise`), réglages JSON (`~/.config/revise/config.json`, `%APPDATA%` sous Windows, dossier de données sur Mac) |
 | `pdf.py` | texte page par page (pypdf) |
+| `net.py` | `urlopen` HTTPS avec les certificats de `certifi` (indispensable dans l'appli Mac empaquetée) ; tout appel Internet passe par là |
 | `importer.py` | `import_pdf(db, engine, pdf, …)` : dédoublonnage par sha256, appelle `engine.generate` |
 | `engines/prompt.py` | commun aux IA : `SYSTEM`, `RULES`, `CARD_SCHEMA`, `text_chunks`, `parse_cards`, filtre `grounded`, `generate_cards(…, chat, label)` |
 | `engines/embedded.py` | moteur `ia` : télécharge llama.cpp (version figée `LLAMA_TAG`) + Gemma 3 (12B si RAM ≥ 14 Go, sinon 4B) dans `data_dir()/ia`, lance `llama-server` (Vulkan → sans GPU → build CPU ; Mac : une seule archive, Metal inclus) |
