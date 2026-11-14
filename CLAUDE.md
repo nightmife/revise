@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (51), GUI en offscreen
+.venv/bin/pytest -q                              # tests (54), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -29,6 +29,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `engines/embedded.py` | moteur `ia` : télécharge llama.cpp (version figée `LLAMA_TAG`) + Gemma 3 (12B si RAM ≥ 14 Go, sinon 4B) dans `data_dir()/ia`, lance `llama-server` (Vulkan → sans GPU → build CPU ; Mac : une seule archive, Metal inclus) |
 | `engines/online.py` | moteur `en-ligne` : API compatible OpenAI avec la clé de l'utilisateur (`PROVIDERS` : groq, gemini, autre) |
 | `engines/distractors.py` | réponses pièges des QCM écrites par l'IA : `add_to_drafts` (fin d'un import), `prepare` (cours déjà en base, lot par lot), `default_engine` |
+| `engines/claude_code.py` | moteur `abonnement` : `claude -p` (abonnement Claude de l'utilisateur, sans outils, sortie JSON) ; proposé dans l'interface seulement si `claude_binary()` trouve Claude Code |
 | `engines/simple.py` | moteur `simple` : règles sans IA |
 | `scheduler.py` | FSRS, `Session` (file de révision ; `cram=True` = mode examen, ordre aléatoire) |
 | `quiz.py` | QCM : `build_quiz` ; mauvaises réponses = `Card.distractors` (IA), sinon réponses des cartes les plus ressemblantes |
@@ -52,8 +53,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 
 ## Non vérifié
 
-- L'IA intégrée et l'IA en ligne n'ont jamais tourné pour de vrai (seulement avec des faux serveurs dans les tests) ;
-  la qualité réelle des réponses pièges n'a donc pas été jugée.
+- L'IA intégrée et l'IA en ligne n'ont jamais tourné pour de vrai ici (seulement avec des faux serveurs dans les tests).
+  Le moteur `abonnement`, lui, a été essayé sur un vrai cours (77 cartes, pièges crédibles, 3 min 45).
 - La version Mac (build GitHub Actions, .dmg, IA intégrée) n'a jamais été lancée sur un vrai Mac.
 - Les noms de modèles par défaut de `online.PROVIDERS` peuvent être périmés : si le service refuse le modèle,
   `OnlineEngine._replace_model` en choisit un dans la liste du service (`pick_model`) et l'enregistre.

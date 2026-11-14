@@ -159,6 +159,8 @@ def default_engine_name() -> str:
     from revise.engines import online
 
     wanted = config.load().get("engine")
+    if wanted == "abonnement":
+        return wanted
     return "en-ligne" if wanted == "en-ligne" or (wanted != "ia" and online.settings()["key"]) else "ia"
 
 
@@ -166,4 +168,8 @@ def default_engine():
     from revise.engines import online
     from revise.engines.embedded import EmbeddedEngine
 
-    return online.OnlineEngine() if default_engine_name() == "en-ligne" else EmbeddedEngine()
+    name = default_engine_name()
+    if name == "abonnement":
+        from revise.engines.claude_code import ClaudeCodeEngine
+        return ClaudeCodeEngine()
+    return online.OnlineEngine() if name == "en-ligne" else EmbeddedEngine()

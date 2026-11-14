@@ -307,8 +307,11 @@ class QuizPage(QWidget):
         deck_ids = list(self.scope.currentData() or [])
         if not deck_ids or self.worker is not None:
             return
-        online = distractors.default_engine_name() == "en-ligne"
-        how = ("L'IA en ligne va écrire les réponses pièges : compte une à deux minutes pour cent questions. "
+        engine = distractors.default_engine_name()
+        online = engine == "en-ligne"
+        how = ("Claude (ton abonnement) va écrire les réponses pièges : compte environ une minute pour cent "
+               "questions." if engine == "abonnement" else
+               "L'IA en ligne va écrire les réponses pièges : compte une à deux minutes pour cent questions. "
                "Les questions du cours sont envoyées au service d'IA choisi." if online else
                "L'IA installée sur cet ordinateur va écrire les réponses pièges. Si elle n'a encore jamais servi, "
                "elle est d'abord téléchargée (2,5 à 7 Go, une seule fois). Ensuite, compte plusieurs minutes "

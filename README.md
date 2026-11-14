@@ -24,12 +24,13 @@ ln -s ~/claudeCode/revise/.venv/bin/revise ~/.local/bin/revise   # pour taper ju
 
 ## Génération des cartes
 
-Trois moteurs, au choix dans l'onglet **Ajouter un cours** (ou `--moteur`) :
+Quatre moteurs, au choix dans l'onglet **Ajouter un cours** (ou `--moteur`) :
 
 | Moteur | Coût | Vitesse | Qualité |
 |---|---|---|---|
 | `ia` — IA intégrée (défaut) | gratuit, hors ligne, sans compte | plusieurs minutes par cours | bonne |
 | `en-ligne` — IA en ligne | gratuit avec ta propre clé API (Groq, Gemini…) | quelques secondes | très bonne |
+| `abonnement` — ton abonnement Claude | compris dans l'abonnement (Pro, Max…) | quelques minutes par cours | excellente |
 | `simple` — sans IA | gratuit, hors ligne | instantané | moyenne, à retoucher, QCM facile |
 
 **IA intégrée.** Au premier import, l'application télécharge toute seule le moteur d'IA (llama.cpp, ~40 Mo) et le
@@ -40,7 +41,11 @@ interrompu reprend où il s'était arrêté. La carte graphique est utilisée s'
 **IA en ligne.** Bouton « Configurer… » de l'onglet Ajouter un cours (ou `revise cle --fournisseur groq --cle …`) : choisis le
 service, colle ta clé gratuite. La clé reste sur ta machine ; le texte du cours est envoyé au service choisi.
 
-Les deux IA lisent le texte du PDF : pas les schémas ni les PDF scannés.
+**Abonnement Claude.** Passe par Claude Code (`claude -p`), qui doit être installé et connecté sur la machine ;
+l'option n'apparaît dans l'application que dans ce cas. Aucune clé à créer ; l'usage compte dans les limites de
+l'abonnement.
+
+Les IA lisent le texte du PDF : pas les schémas ni les PDF scannés.
 
 **Réponses pièges des QCM.** Après les cartes, l'IA écrit pour chaque question trois fausses réponses crédibles sur
 le même sujet. Sans elles (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
@@ -73,6 +78,7 @@ En ligne de commande (sans interface) :
 revise importer ~/Downloads/*CM*.pdf -m LIFAPSD      # --moteur ia | en-ligne | simple
 revise reviser --cours CM7 CM8 --examen
 revise pieges --cours CM7                            # réponses pièges des QCM d'un cours déjà importé
+revise pieges --moteur abonnement                    # … pour tous les cours, avec l'abonnement Claude
 revise stats
 ```
 

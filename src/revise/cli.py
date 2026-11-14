@@ -22,11 +22,13 @@ err_console = Console(stderr=True)
 
 
 def pick_engine(name: str):
+    from revise.engines.claude_code import ClaudeCodeEngine
     from revise.engines.embedded import EmbeddedEngine
     from revise.engines.online import OnlineEngine
     from revise.engines.simple import SimpleEngine
 
-    return {"auto": EmbeddedEngine, "ia": EmbeddedEngine, "en-ligne": OnlineEngine, "simple": SimpleEngine}[name]()
+    return {"auto": EmbeddedEngine, "ia": EmbeddedEngine, "en-ligne": OnlineEngine, "simple": SimpleEngine,
+            "abonnement": ClaudeCodeEngine}[name]()
 
 
 # --------------------------------------------------------------- commandes ---
@@ -265,9 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("importer", aliases=["import"], help="créer des cartes à partir de PDF")
     s.add_argument("pdf", nargs="+")
     s.add_argument("-m", "--matiere", help="matière (défaut : nom du dossier du PDF)")
-    s.add_argument("--moteur", choices=["auto", "ia", "en-ligne", "simple"], default="auto",
+    s.add_argument("--moteur", choices=["auto", "ia", "en-ligne", "abonnement", "simple"], default="auto",
                    help="ia = IA intégrée, gratuite et hors ligne (défaut ; téléchargée au premier import), "
-                        "en-ligne = IA en ligne avec ta clé API gratuite (voir « revise cle »), simple = sans IA")
+                        "en-ligne = IA en ligne avec ta clé API gratuite (voir « revise cle »), "
+                        "abonnement = ton abonnement Claude, via Claude Code installé sur la machine, simple = sans IA")
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")
     s.set_defaults(func=cmd_import)
@@ -281,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("pieges", help="faire écrire par l'IA les mauvaises réponses des QCM (cours déjà importés)")
     s.add_argument("-c", "--cours", nargs="+", metavar="COURS", help="seulement ces cours (défaut : tous)")
-    s.add_argument("--moteur", choices=["ia", "en-ligne"], help="défaut : l'IA utilisée pour les imports")
+    s.add_argument("--moteur", choices=["ia", "en-ligne", "abonnement"], help="défaut : l'IA utilisée pour les imports")
     s.set_defaults(func=cmd_traps)
 
     s = sub.add_parser("reviser", aliases=["r"], help="lancer une séance de révision")

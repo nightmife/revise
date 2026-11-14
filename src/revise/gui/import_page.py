@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFil
 from revise import config
 from revise.db import Database, file_sha256
 from revise.engines import online
+from revise.engines.claude_code import claude_binary
 from revise.gui.common import muted, page_header, row, save_cancel_buttons
 from revise.importer import guess_subject, import_pdf
 from revise.models import ReviseError
@@ -23,13 +24,15 @@ AUTO_SUBJECT = "Automatique (d'après le nom du fichier)"
 SEARCH_DIRS = ["Downloads", "Téléchargements", "Documents"]
 
 
-ENGINES = ("ia", "en-ligne", "simple")  # dans l'ordre des boutons radio
+ENGINES = ("ia", "en-ligne", "simple", "abonnement")  # dans l'ordre des boutons radio
 
 
 def make_engine(name: str):
+    from revise.engines.claude_code import ClaudeCodeEngine
     from revise.engines.embedded import EmbeddedEngine
     from revise.engines.simple import SimpleEngine
-    return {"ia": EmbeddedEngine, "en-ligne": online.OnlineEngine, "simple": SimpleEngine}[name]()
+    return {"ia": EmbeddedEngine, "en-ligne": online.OnlineEngine, "simple": SimpleEngine,
+            "abonnement": ClaudeCodeEngine}[name]()
 
 
 class KeyDialog(QDialog):
@@ -204,6 +207,7 @@ class ImportPage(QWidget):
         self.r_ia = QRadioButton("L'IA de cet ordinateur (conseillé)")
         self.r_online = QRadioButton("L'IA en ligne (le plus rapide)")
         self.r_simple = QRadioButton("Sans IA")
+        self.r_claude = QRadioButton("Mon abonnement Claude")
         key_btn = QPushButton("Configurer…")
         key_btn.clicked.connect(self.edit_key)
         self.key_state = muted("")
@@ -214,8 +218,11 @@ class ImportPage(QWidget):
             self.r_online: "Quelques secondes par cours. Gratuit, mais il faut créer une clé (2 minutes) "
                            "et le texte du cours est envoyé sur Internet.",
             self.r_simple: "Immédiat, mais cartes approximatives à corriger et QCM facile.",
+            self.r_claude: "Rapide et de très bonne qualité, sans clé : passe par Claude Code, installé et connecté "
+                           "sur cet ordinateur. Compte dans les limites de ton abonnement.",
         }
-        for i, r in enumerate((self.r_ia, self.r_online, self.r_simple)):
+        has_claude = claude_binary() is not None  # proposé seulement à ceux qui ont Claude Code
+        for i, r in enumerate((self.r_ia, self.r_online, self.r_simple, self.r_claude)):
             self.engine_group.addButton(r, i)
             font = r.font()
             font.setBold(True)
@@ -227,8 +234,13 @@ class ImportPage(QWidget):
             detail = muted(details[r])
             detail.setContentsMargins(30, 0, 0, 4)
             lay.addWidget(detail)
+            if r is self.r_claude:
+                r.setVisible(has_claude)
+                detail.setVisible(has_claude)
         saved = config.load().get("engine")
-        self.engine_group.button(ENGINES.index(saved) if saved in ENGINES else 0).setChecked(True)
+        if saved not in ENGINES or (saved == "abonnement" and not has_claude):
+            saved = "ia"
+        self.engine_group.button(ENGINES.index(saved)).setChecked(True)
         self._update_key_state()
 
         self.import_btn = QPushButton("Créer les cartes")
