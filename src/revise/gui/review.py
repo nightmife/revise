@@ -122,6 +122,9 @@ class ReviewPage(QWidget):
         cl.addWidget(self.sep)
         self.answer = markdown_view(15)
         cl.addWidget(self.answer, 4)
+        self.think = muted("Cherche la réponse dans ta tête (ou dis-la à voix haute), puis affiche-la pour vérifier.")
+        self.think.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cl.addWidget(self.think, 4)
         self.explanation = markdown_view(13)
         self.explanation.setVisible(False)
         cl.addWidget(self.explanation, 3)
@@ -158,7 +161,7 @@ class ReviewPage(QWidget):
         self.explain_btn = QPushButton("Explique-moi")
         self.explain_btn.setToolTip("L'IA explique cette réponse avec d'autres mots et un exemple (touche X).")
         self.explain_btn.clicked.connect(self.explain)
-        self.back_btn = QPushButton("Retour aux cours")
+        self.back_btn = QPushButton("Retour")
         self.where.setMinimumWidth(10)
         self.back_btn.setObjectName("primary")
         self.back_btn.clicked.connect(self.finished.emit)
@@ -183,7 +186,6 @@ class ReviewPage(QWidget):
         self.started = time.monotonic()
         self.labels = {d.id: deck_label(d) for d in self.db.decks()}
         self.subjects = {d.id: d.subject for d in self.db.decks()}
-        self.progress.setVisible(exam)
         self.progress.setRange(0, max(1, self.total))
         self.next_card()
         self.setFocus()
@@ -200,6 +202,7 @@ class ReviewPage(QWidget):
                     f" &nbsp; <span style='color:{theme.WARN}'>{learning} à revoir</span>"
                     f" &nbsp; <span style='color:{theme.MUTED}'>{s.done} réponses{skipped}</span>")
         else:
+            self.progress.setValue(max(0, self.total - s.remaining))
             html = (f"<span style='color:{theme.ACCENT_HOVER}'>{new} nouvelles</span> &nbsp; "
                     f"<span style='color:{theme.WARN}'>{learning} en cours d'apprentissage</span> &nbsp; "
                     f"<span style='color:{theme.GOOD}'>{review} à revoir</span> &nbsp; "
@@ -217,6 +220,7 @@ class ReviewPage(QWidget):
         self.answer.setVisible(False)
         self.sep.setVisible(False)
         self._request += 1
+        self.think.setVisible(self.card is not None)
         self.explanation.setVisible(False)
         self.explain_btn.setVisible(False)
         has = self.card is not None
@@ -242,6 +246,7 @@ class ReviewPage(QWidget):
         if self.card is None or self.revealed or not self.isVisible():
             return
         self.revealed = True
+        self.think.setVisible(False)
         show_markdown(self.answer, self.card.answer)
         self.answer.setVisible(True)
         self.sep.setVisible(True)

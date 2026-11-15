@@ -82,6 +82,16 @@ def row(*widgets, stretch_at: int | None = None, spacing: int = 8) -> QHBoxLayou
     return lay
 
 
+def step_header(number: int, title: str) -> QHBoxLayout:
+    """Titre d'une étape numérotée : pastille « 1 » puis ce qu'il y a à faire."""
+    badge = QLabel(str(number))
+    badge.setObjectName("stepNumber")
+    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label = QLabel(title)
+    label.setObjectName("section")
+    return row(badge, label, None, spacing=10)
+
+
 def muted(text: str) -> QLabel:
     lab = QLabel(text)
     lab.setObjectName("muted")

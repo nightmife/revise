@@ -15,7 +15,7 @@ from revise import config, documents, share
 from revise.db import Database, file_sha256
 from revise.engines import online
 from revise.engines.claude_code import claude_binary
-from revise.gui.common import muted, page_header, row, save_cancel_buttons
+from revise.gui.common import muted, page_header, row, save_cancel_buttons, step_header
 from revise.importer import guess_subject, import_pdf
 from revise.models import ReviseError
 
@@ -176,6 +176,8 @@ class ImportPage(QWidget):
                                   "cartes de révision, une fiche et des QCM. Un cours partagé (fichier .revise) "
                                   "s'ajoute aussi ici."))
 
+        lay.setSpacing(8)
+        lay.addLayout(step_header(1, "Choisis tes cours"))
         self.drop = QFrame()
         self.drop.setObjectName("drop")
         dl = QHBoxLayout(self.drop)
@@ -203,6 +205,7 @@ class ImportPage(QWidget):
         self.count_label.setWordWrap(False)
         lay.addLayout(row(self.search, self.count_label))
         self.files = QListWidget()
+        self.files.setMinimumHeight(110)
         lay.addWidget(self.files, 1)
 
         self.subject = QComboBox()
@@ -211,9 +214,8 @@ class ImportPage(QWidget):
         self.subject.setToolTip("Sert à regrouper les cours. Tu peux taper un nouveau nom (ex. Histoire).")
         lay.addLayout(row(muted("Matière :"), self.subject, None))
 
-        how = QLabel("Qui écrit les cartes ?")
-        how.setObjectName("section")
-        lay.addWidget(how)
+        lay.addSpacing(6)
+        lay.addLayout(step_header(2, "Qui écrit les cartes ?"))
         self.engine_group = QButtonGroup(self)
         self.r_ia = QRadioButton("L'IA de cet ordinateur (conseillé)")
         self.r_online = QRadioButton("L'IA en ligne (le plus rapide)")
@@ -255,6 +257,8 @@ class ImportPage(QWidget):
         self.engine_group.button(ENGINES.index(saved)).setChecked(True)
         self._update_key_state()
 
+        lay.addSpacing(6)
+        lay.addLayout(step_header(3, "C'est parti"))
         self.import_btn = QPushButton("Créer les cartes")
         self.import_btn.setObjectName("primary")
         self.import_btn.setMinimumHeight(46)

@@ -33,7 +33,7 @@ def selftest() -> int:
         win = MainWindow(db)
         win.show()
         app.processEvents()
-        for page in range(5):
+        for page in range(6):
             win.show_page(page)
             app.processEvents()
         win.close()

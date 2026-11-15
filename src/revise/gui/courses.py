@@ -7,20 +7,49 @@ from pathlib import Path
 
 from datetime import date, timedelta
 
-from PySide6.QtCore import QDate, Qt, Signal
-from PySide6.QtGui import QColor, QTextCharFormat
+from PySide6.QtCore import QDate, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QTextCharFormat
 from PySide6.QtWidgets import (QCalendarWidget, QCheckBox, QDialog, QFileDialog, QFrame, QHeaderView, QLabel,
-                               QMessageBox, QPushButton, QSpinBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
-                               QWidget)
+                               QMessageBox, QPushButton, QSpinBox, QStyledItemDelegate, QTreeWidget,
+                               QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from revise import exam, share
+from revise import config, exam, share, today
 from revise.db import Database, deck_label, parse_iso, utcnow
 from revise.gui import theme
 from revise.gui.common import ActionCard, confirm, muted, page_header, row
 from revise.models import ReviseError
-from revise.scheduler import KNOWN_RETRIEVABILITY, load_state, make_scheduler, start_of_day
 
 DECK_ROLE = Qt.ItemDataRole.UserRole
+MASTERY_ROLE = Qt.ItemDataRole.UserRole + 1   # (cartes sues, cartes en tout)
+MASTERY_COLUMN = 4
+
+
+class MasteryBar(QStyledItemDelegate):
+    """Colonne « Maîtrise » : une barre et un pourcentage plutôt qu'un nombre brut."""
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        value = index.data(MASTERY_ROLE)
+        if not value:
+            super().paint(painter, option, index)
+            return
+        known, total = value
+        percent = exam.readiness(known, total)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = option.rect.adjusted(8, 0, -8, 0)
+        label_width = 44
+        bar = QRectF(rect.left(), rect.center().y() - 3, max(10, rect.width() - label_width - 8), 7)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.PANEL_2 if not option.state & option.state.State_MouseOver else theme.BORDER))
+        painter.drawRoundedRect(bar, 3.5, 3.5)
+        if known:
+            filled = QRectF(bar.left(), bar.top(), max(7.0, bar.width() * known / total), bar.height())
+            painter.setBrush(QColor(theme.GOOD if percent >= 80 else theme.ACCENT))
+            painter.drawRoundedRect(filled, 3.5, 3.5)
+        painter.setPen(QColor(theme.TEXT if known else theme.MUTED))
+        painter.drawText(QRectF(bar.right() + 8, rect.top(), label_width, rect.height()),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{percent} %")
+        painter.restore()
 SHARE_FILTER = "Cours pour revise (*.revise)"
 ANKI_FILTER = "Cartes pour Anki (*.txt)"
 
@@ -85,14 +114,17 @@ class CoursesPage(QWidget):
         self._pressed: tuple[QTreeWidgetItem, Qt.CheckState] | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
-        lay.addWidget(page_header("Mes cours", "Coche les cours que tu veux travailler, puis choisis une activité."))
+        lay.setSpacing(10)
+        lay.addWidget(page_header("Mes cours", "Coche un ou plusieurs cours, puis choisis ce que tu veux faire."))
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(6)
-        self.tree.setHeaderLabels(["Cours", "Cartes", "Nouvelles", "À revoir", "Connues", "Examen"])
+        self.tree.setHeaderLabels(["Cours", "Cartes", "Nouvelles", "À revoir", "Maîtrise", "Examen"])
+        self.tree.setItemDelegateForColumn(MASTERY_COLUMN, MasteryBar(self.tree))
+        self.tree.setMouseTracking(True)
         for c, tip in enumerate(["", "Nombre de questions du cours", "Cartes que tu n'as encore jamais vues",
                                  "Cartes à revoir aujourd'hui pour ne pas les oublier",
-                                 "Cartes que tu as su récemment",
+                                 "Part des cartes que tu sais en ce moment",
                                  "Jours avant l'examen, et part des cartes que tu sais déjà"]):
             if tip:
                 self.tree.headerItem().setToolTip(c, tip)
@@ -104,6 +136,7 @@ class CoursesPage(QWidget):
         for c in range(1, 5):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
             self.tree.setColumnWidth(c, 92)
+        self.tree.setColumnWidth(MASTERY_COLUMN, 170)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         self.tree.setColumnWidth(5, 170)
         hdr.setMinimumSectionSize(40)
@@ -159,6 +192,10 @@ class CoursesPage(QWidget):
         lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn,
                           self.exam_btn_date, self.share_btn, self.delete_btn))
 
+        self.what = QLabel("Que veux-tu faire ?")
+        self.what.setObjectName("section")
+        lay.addSpacing(4)
+        lay.addWidget(self.what)
         self.review_btn = ActionCard("Réviser", "Les cartes du jour : celles à revoir et quelques nouvelles.", True)
         self.review_btn.clicked.connect(lambda: self._start(False))
         self.exam_btn = ActionCard("Tout revoir", "Veille de contrôle : toutes les cartes, jusqu'à les savoir.")
@@ -176,7 +213,9 @@ class CoursesPage(QWidget):
 
         self.new_per_day = QSpinBox()
         self.new_per_day.setRange(0, 999)
-        self.new_per_day.setValue(20)
+        saved = config.load().get("new_per_day", today.DEFAULT_NEW_PER_DAY)
+        self.new_per_day.setValue(saved if isinstance(saved, int) and not isinstance(saved, bool) else
+                                  today.DEFAULT_NEW_PER_DAY)
         self.new_per_day.setToolTip("« Réviser » ajoute chaque jour au maximum ce nombre de cartes jamais vues.")
         self.include_known = QCheckBox("« Tout revoir » repose aussi les cartes déjà connues")
         self.include_known.setToolTip("Sinon, les cartes que tu as su récemment sont sautées.")
@@ -185,7 +224,7 @@ class CoursesPage(QWidget):
         lay.addSpacing(4)
         lay.addLayout(row(self.settings_label, self.new_per_day, self.include_known, None, spacing=10))
         self.exam_hint = muted("")
-        self.new_per_day.valueChanged.connect(lambda _: self._update_buttons())
+        self.new_per_day.valueChanged.connect(self._new_per_day_changed)
         self.exam_hint.setVisible(False)
         lay.addWidget(self.exam_hint)
         self.refresh()
@@ -196,8 +235,7 @@ class CoursesPage(QWidget):
         self.tree.blockSignals(True)
         self.tree.clear()
         now = utcnow()
-        last = self.db.last_ratings()
-        sch = make_scheduler()
+        levels = today.mastery(self.db, now)
         for subject in self.db.subjects():
             parent = QTreeWidgetItem([subject])
             parent.setFlags(parent.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
@@ -209,19 +247,20 @@ class CoursesPage(QWidget):
                 cards = self.db.cards(deck_id=d.id, include_suspended=False)
                 new = sum(1 for c in cards if c.fsrs is None)
                 due = sum(1 for c in cards if c.fsrs is not None and parse_iso(c.due) <= now)
-                known = sum(1 for c in cards if c.fsrs is not None and last.get(c.id, 0) >= 3
-                            and sch.get_card_retrievability(load_state(c), now) >= KNOWN_RETRIEVABILITY)
+                known = levels.get(d.id, (0, 0))[0]
                 vals = [len(cards), new, due, known]
                 totals = [a + b for a, b in zip(totals, vals)]
                 item = QTreeWidgetItem([deck_label(d)] + [str(v) for v in vals] + [self._exam_text(d, known, len(cards))])
                 item.setTextAlignment(5, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 item.setData(0, DECK_ROLE, d.id)
+                item.setData(MASTERY_COLUMN, MASTERY_ROLE, (known, len(cards)))
                 item.setToolTip(0, f"{d.title}\n{d.source or ''}\nImporté le {d.created[:10]} ({d.engine})")
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.CheckState.Checked if d.id in checked else Qt.CheckState.Unchecked)
                 for c in range(1, 5):
                     item.setTextAlignment(c, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 parent.addChild(item)
+            parent.setData(MASTERY_COLUMN, MASTERY_ROLE, (totals[3], totals[0]))
             for c, v in enumerate(totals, start=1):
                 parent.setText(c, str(v))
                 parent.setTextAlignment(c, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -229,7 +268,8 @@ class CoursesPage(QWidget):
             parent.setExpanded(True)
         self.tree.blockSignals(False)
         has = self.tree.topLevelItemCount() > 0
-        for w in (self.tree, self.all_btn, self.none_btn, self.selection_label, *self.actions, self.new_per_day,
+        for w in (self.tree, self.all_btn, self.none_btn, self.selection_label, self.what, *self.actions,
+                  self.new_per_day,
                   self.include_known, self.edit_btn, self.exam_btn_date, self.share_btn, self.delete_btn,
                   self.settings_label):
             w.setVisible(has)
@@ -275,6 +315,8 @@ class CoursesPage(QWidget):
         n_cards = sum(len(self.db.cards(deck_id=d, include_suspended=False)) for d in sel)
         self.selection_label.setText(f"{len(sel)} cours coché{'s' if len(sel) > 1 else ''}, {n_cards} cartes" if sel
                                      else "Coche au moins un cours pour commencer.")
+        self.selection_label.setStyleSheet("" if sel else f"color: {theme.WARN}; font-weight: 600;")
+        self.what.setText("Que veux-tu faire ?" if sel else "Que veux-tu faire ? (coche d'abord un cours ci-dessus)")
         for b in self.actions:
             b.setEnabled(bool(sel))
         self.edit_btn.setEnabled(len(sel) == 1)
@@ -311,21 +353,11 @@ class CoursesPage(QWidget):
         return f"{exam.countdown(days)} · prêt à {exam.readiness(known, total)} %"
 
     def exam_plan(self, deck_ids: list[int]) -> tuple[int, int | None]:
-        """(nouvelles cartes par jour qu'il faut pour les examens à venir des cours donnés,
-        jours avant le plus proche de ces examens — None s'il n'y en a pas)."""
-        needed, soonest = 0, None
-        today_start = start_of_day(utcnow())
-        for deck_id in deck_ids:
-            deck = self.db.deck(deck_id)
-            days = exam.days_left(deck.exam_date) if deck else None
-            if days is None or days < 0:
-                continue
-            soonest = days if soonest is None else min(soonest, days)
-            # Les nouvelles cartes déjà vues aujourd'hui comptent dans la part du jour.
-            todo = (len(self.db.new_cards(100_000, deck_ids=[deck_id]))
-                    + self.db.new_introduced_since(today_start, deck_ids=[deck_id]))
-            needed += exam.new_per_day(todo, days)
-        return needed, soonest
+        return today.exam_plan(self.db, deck_ids)
+
+    def _new_per_day_changed(self, value: int) -> None:
+        config.save({"new_per_day": value})  # retenu d'une fois sur l'autre, et utilisé par l'accueil
+        self._update_buttons()
 
     def _set_exam(self) -> None:
         sel = self.selected_decks()

@@ -25,6 +25,8 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     win.resize(1180, 780)
     win.show()
     qapp.processEvents()
+    assert win.stack.currentWidget() is win.home          # l'application s'ouvre sur le programme du jour
+    win.show_page(win.COURSES)
     page = win.courses
     root = page.tree.topLevelItem(0)
     assert root.text(0) == "LIFAPSD" and root.childCount() == 2
