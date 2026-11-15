@@ -1,7 +1,7 @@
 # revise
 
-Transforme tes CM en PDF en cartes de révision, puis te les fait réviser au bon moment
-(répétition espacée, algorithme FSRS), avec une fiche « Apprendre » et des QCM.
+Transforme tes cours (PDF, PowerPoint, Word, texte) en cartes de révision, puis te les fait réviser au bon
+moment (répétition espacée, algorithme FSRS), avec une fiche « Apprendre » et des QCM.
 
 ## Installation
 
@@ -45,7 +45,11 @@ service, colle ta clé gratuite. La clé reste sur ta machine ; le texte du cour
 l'option n'apparaît dans l'application que dans ce cas. Aucune clé à créer ; l'usage compte dans les limites de
 l'abonnement.
 
-Les IA lisent le texte du PDF : pas les schémas ni les PDF scannés.
+**Formats lus** : PDF, PowerPoint (`.pptx`, une diapositive = une page), Word (`.docx`), texte (`.txt`, `.md`).
+Les anciens `.ppt` / `.doc` sont à enregistrer en `.pptx` / `.docx`.
+
+**Pages scannées et schémas** : seul « Mon abonnement Claude » les lit (les pages scannées ou qui portent une
+figure lui sont envoyées en PDF, il les regarde). Les autres IA ne lisent que le texte.
 
 **Réponses pièges des QCM.** Après les cartes, l'IA écrit pour chaque question trois fausses réponses crédibles sur
 le même sujet. Sans elles (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
@@ -69,7 +73,13 @@ Dans l'application :
   - **QCM** : quatre propositions (touches `1` à `4`, `Entrée` pour continuer), score et erreurs à refaire.
     Le QCM ne modifie pas le planning de révision.
 - Révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien, `4` facile,
-  `E` corriger la carte, `S` ne plus la poser, `Échap` terminer.
+  `E` corriger la carte, `S` ne plus la poser, `X` « Explique-moi », `Échap` terminer.
+- **Explique-moi** (réponse affichée) : l'IA choisie pour les imports explique la réponse avec d'autres mots
+  et un exemple.
+- **Date d'examen…** (dans Mes cours) : donne le jour de l'examen des cours cochés. La colonne « Examen » montre
+  le compte à rebours et la part des cartes déjà sues, et « Réviser » augmente tout seul le nombre de nouvelles
+  cartes par jour pour que tout soit vu à temps (la veille reste libre pour « Tout revoir »).
+- Les formules LaTeX des cartes (`$x^2$`, `\(\alpha\)`) s'affichent en clair (x², α) et le code est coloré.
 - **Mes progrès** : série, réponses justes, régularité, prévisions.
 - **Partager…** (dans Mes cours) : enregistre les cours cochés dans un fichier `.revise` à envoyer à quelqu'un, qui
   le glisse dans « Ajouter un cours » — sans IA ni attente. Les cartes et les réponses pièges sont partagées, pas ta
@@ -78,8 +88,11 @@ Dans l'application :
   sauvegarde (changement d'ordinateur). Avant une restauration, les données remplacées sont gardées dans
   `avant-restauration.db`, à côté de la base.
 - **Mises à jour** : au lancement, l'application regarde s'il existe une version plus récente sur GitHub et affiche
-  un bouton en bas à gauche pour la télécharger. Rien n'est envoyé ; pour couper la vérification, mets
-  `"check_updates": false` dans le fichier de réglages.
+  un bouton en bas à gauche. Sous Windows et Mac, un clic l'installe : téléchargement, vérification de l'empreinte
+  et du démarrage de la nouvelle version, remplacement, relance (tes données ne sont pas touchées ; l'ancienne
+  version est gardée jusqu'au lancement suivant). Sous Linux, le bouton ouvre la page de téléchargement
+  (`git pull` suffit). Rien n'est envoyé ; pour couper la vérification, mets `"check_updates": false` dans le
+  fichier de réglages.
 
 En ligne de commande (sans interface) :
 

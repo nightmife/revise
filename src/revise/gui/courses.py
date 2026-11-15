@@ -5,19 +5,70 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHeaderView, QLabel, QMessageBox, QPushButton,
-                               QSpinBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from datetime import date, timedelta
 
-from revise import share
+from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtGui import QColor, QTextCharFormat
+from PySide6.QtWidgets import (QCalendarWidget, QCheckBox, QDialog, QFileDialog, QFrame, QHeaderView, QLabel,
+                               QMessageBox, QPushButton, QSpinBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                               QWidget)
+
+from revise import exam, share
 from revise.db import Database, deck_label, parse_iso, utcnow
+from revise.gui import theme
 from revise.gui.common import ActionCard, confirm, muted, page_header, row
 from revise.models import ReviseError
-from revise.scheduler import KNOWN_RETRIEVABILITY, load_state, make_scheduler
+from revise.scheduler import KNOWN_RETRIEVABILITY, load_state, make_scheduler, start_of_day
 
 DECK_ROLE = Qt.ItemDataRole.UserRole
 SHARE_FILTER = "Cours pour revise (*.revise)"
 ANKI_FILTER = "Cartes pour Anki (*.txt)"
+
+
+class ExamDialog(QDialog):
+    """Choix de la date d'examen des cours cochés."""
+
+    def __init__(self, current: str | None, count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Date d'examen")
+        self.chosen: str | None = current
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 20, 24, 20)
+        lay.setSpacing(10)
+        lay.addWidget(muted(f"Quel jour est l'examen de {'ce cours' if count == 1 else f'ces {count} cours'} ? "
+                            "« Réviser » te donnera chaque jour assez de nouvelles cartes pour avoir tout vu "
+                            "à temps, en gardant la veille pour tout revoir."))
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(False)
+        self.calendar.setMinimumSize(420, 290)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.calendar.setMinimumDate(QDate.currentDate())
+        plain = QTextCharFormat()  # pas de week-ends en rouge : illisible sur le fond sombre
+        plain.setForeground(QColor(theme.TEXT))
+        for day in (Qt.DayOfWeek.Saturday, Qt.DayOfWeek.Sunday):
+            self.calendar.setWeekdayTextFormat(day, plain)
+        header = QTextCharFormat()
+        header.setForeground(QColor(theme.MUTED))
+        header.setBackground(QColor(theme.PANEL))
+        self.calendar.setHeaderTextFormat(header)
+        start = exam.parse_date(current)
+        if start is None or start < date.today():
+            start = date.today() + timedelta(days=14)
+        self.calendar.setSelectedDate(QDate(start.year, start.month, start.day))
+        lay.addWidget(self.calendar)
+        remove = QPushButton("Enlever la date")
+        remove.setEnabled(current is not None)
+        remove.clicked.connect(lambda: self._finish(None))
+        cancel = QPushButton("Annuler")
+        cancel.clicked.connect(self.reject)
+        save = QPushButton("Enregistrer")
+        save.setObjectName("primary")
+        save.clicked.connect(lambda: self._finish(self.calendar.selectedDate().toString(Qt.DateFormat.ISODate)))
+        lay.addLayout(row(remove, None, cancel, save))
+
+    def _finish(self, value: str | None) -> None:
+        self.chosen = value
+        self.accept()
 
 
 class CoursesPage(QWidget):
@@ -37,11 +88,12 @@ class CoursesPage(QWidget):
         lay.addWidget(page_header("Mes cours", "Coche les cours que tu veux travailler, puis choisis une activité."))
 
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["Cours", "Cartes", "Nouvelles", "À revoir", "Connues"])
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(["Cours", "Cartes", "Nouvelles", "À revoir", "Connues", "Examen"])
         for c, tip in enumerate(["", "Nombre de questions du cours", "Cartes que tu n'as encore jamais vues",
                                  "Cartes à revoir aujourd'hui pour ne pas les oublier",
-                                 "Cartes que tu as su récemment"]):
+                                 "Cartes que tu as su récemment",
+                                 "Jours avant l'examen, et part des cartes que tu sais déjà"]):
             if tip:
                 self.tree.headerItem().setToolTip(c, tip)
         self.tree.setRootIsDecorated(True)
@@ -52,6 +104,8 @@ class CoursesPage(QWidget):
         for c in range(1, 5):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
             self.tree.setColumnWidth(c, 92)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.tree.setColumnWidth(5, 170)
         hdr.setMinimumSectionSize(40)
         self.tree.itemChanged.connect(self._on_changed)
         self.tree.itemPressed.connect(self._on_pressed)
@@ -91,6 +145,10 @@ class CoursesPage(QWidget):
         self.selection_label.setWordWrap(False)
         self.edit_btn = QPushButton("Voir et corriger les cartes")
         self.edit_btn.clicked.connect(self._edit)
+        self.exam_btn_date = QPushButton("Date d'examen…")
+        self.exam_btn_date.setToolTip("Indique le jour de l'examen des cours cochés : l'application règle le rythme "
+                                      "des nouvelles cartes pour que tout soit vu à temps.")
+        self.exam_btn_date.clicked.connect(self._set_exam)
         self.share_btn = QPushButton("Partager…")
         self.share_btn.setToolTip("Enregistre les cours cochés dans un fichier à envoyer à quelqu'un : il n'a plus "
                                   "qu'à le glisser dans « Ajouter un cours ». Ta progression n'est pas incluse.")
@@ -98,8 +156,8 @@ class CoursesPage(QWidget):
         self.delete_btn = QPushButton("Supprimer")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.clicked.connect(self._delete)
-        lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn, self.share_btn,
-                          self.delete_btn))
+        lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn,
+                          self.exam_btn_date, self.share_btn, self.delete_btn))
 
         self.review_btn = ActionCard("Réviser", "Les cartes du jour : celles à revoir et quelques nouvelles.", True)
         self.review_btn.clicked.connect(lambda: self._start(False))
@@ -126,6 +184,10 @@ class CoursesPage(QWidget):
         self.settings_label.setWordWrap(False)
         lay.addSpacing(4)
         lay.addLayout(row(self.settings_label, self.new_per_day, self.include_known, None, spacing=10))
+        self.exam_hint = muted("")
+        self.new_per_day.valueChanged.connect(lambda _: self._update_buttons())
+        self.exam_hint.setVisible(False)
+        lay.addWidget(self.exam_hint)
         self.refresh()
 
     # ------------------------------------------------------------------ données
@@ -151,7 +213,8 @@ class CoursesPage(QWidget):
                             and sch.get_card_retrievability(load_state(c), now) >= KNOWN_RETRIEVABILITY)
                 vals = [len(cards), new, due, known]
                 totals = [a + b for a, b in zip(totals, vals)]
-                item = QTreeWidgetItem([deck_label(d)] + [str(v) for v in vals])
+                item = QTreeWidgetItem([deck_label(d)] + [str(v) for v in vals] + [self._exam_text(d, known, len(cards))])
+                item.setTextAlignment(5, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 item.setData(0, DECK_ROLE, d.id)
                 item.setToolTip(0, f"{d.title}\n{d.source or ''}\nImporté le {d.created[:10]} ({d.engine})")
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -167,7 +230,8 @@ class CoursesPage(QWidget):
         self.tree.blockSignals(False)
         has = self.tree.topLevelItemCount() > 0
         for w in (self.tree, self.all_btn, self.none_btn, self.selection_label, *self.actions, self.new_per_day,
-                  self.include_known, self.edit_btn, self.share_btn, self.delete_btn, self.settings_label):
+                  self.include_known, self.edit_btn, self.exam_btn_date, self.share_btn, self.delete_btn,
+                  self.settings_label):
             w.setVisible(has)
         self.empty.setVisible(not has)
         self.empty_space.setVisible(not has)
@@ -216,17 +280,65 @@ class CoursesPage(QWidget):
         self.edit_btn.setEnabled(len(sel) == 1)
         self.edit_btn.setToolTip("" if len(sel) == 1 else "Coche un seul cours pour voir ses cartes.")
         self.share_btn.setEnabled(bool(sel))
+        self.exam_btn_date.setEnabled(bool(sel))
         self.delete_btn.setEnabled(bool(sel))
+        needed, soonest = self.exam_plan(sel)
+        if soonest is not None and needed > self.new_per_day.value():
+            when = {0: "aujourd'hui", 1: "demain"}.get(soonest, f"dans {soonest} jours")
+            self.exam_hint.setText(f"Examen {when} : « Réviser » proposera {needed} nouvelles cartes par jour "
+                                   f"(au lieu de {self.new_per_day.value()}) pour que tout soit vu à temps.")
+        self.exam_hint.setVisible(bool(sel) and soonest is not None and needed > self.new_per_day.value())
 
     def _start(self, exam: bool) -> None:
         sel = self.selected_decks()
         if sel:
-            self.start_review.emit(sel, exam, self.include_known.isChecked(), self.new_per_day.value())
+            new_per_day = self.new_per_day.value() if exam else max(self.new_per_day.value(), self.exam_plan(sel)[0])
+            self.start_review.emit(sel, exam, self.include_known.isChecked(), new_per_day)
 
     def _edit(self) -> None:
         sel = self.selected_decks()
         if len(sel) == 1:
             self.edit_cards.emit(sel[0])
+
+    # ------------------------------------------------------------------- examen
+    @staticmethod
+    def _exam_text(deck, known: int, total: int) -> str:
+        days = exam.days_left(deck.exam_date)
+        if days is None:
+            return ""
+        if days < 0:
+            return "passé"
+        return f"{exam.countdown(days)} · prêt à {exam.readiness(known, total)} %"
+
+    def exam_plan(self, deck_ids: list[int]) -> tuple[int, int | None]:
+        """(nouvelles cartes par jour qu'il faut pour les examens à venir des cours donnés,
+        jours avant le plus proche de ces examens — None s'il n'y en a pas)."""
+        needed, soonest = 0, None
+        today_start = start_of_day(utcnow())
+        for deck_id in deck_ids:
+            deck = self.db.deck(deck_id)
+            days = exam.days_left(deck.exam_date) if deck else None
+            if days is None or days < 0:
+                continue
+            soonest = days if soonest is None else min(soonest, days)
+            # Les nouvelles cartes déjà vues aujourd'hui comptent dans la part du jour.
+            todo = (len(self.db.new_cards(100_000, deck_ids=[deck_id]))
+                    + self.db.new_introduced_since(today_start, deck_ids=[deck_id]))
+            needed += exam.new_per_day(todo, days)
+        return needed, soonest
+
+    def _set_exam(self) -> None:
+        sel = self.selected_decks()
+        if not sel:
+            return
+        dates = {d.exam_date for d in map(self.db.deck, sel) if d is not None}
+        dialog = ExamDialog(dates.pop() if len(dates) == 1 else None, len(sel), self)
+        if dialog.exec():
+            self.set_exam_date(dialog.chosen)
+
+    def set_exam_date(self, value: str | None) -> None:
+        self.db.set_exam_date(self.selected_decks(), value)
+        self.refresh()
 
     def _share(self) -> None:
         sel = self.selected_decks()

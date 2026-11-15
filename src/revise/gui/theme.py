@@ -36,6 +36,13 @@ QPushButton#update {{ text-align: left; padding: 9px 12px; border: 1px solid {AC
                       margin: 2px 10px 8px 10px; background: {ACCENT_DIM}; color: white; font-size: 10pt;
                       font-weight: 700; }}
 QPushButton#update:hover {{ background: {ACCENT}; color: #0d1020; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {PANEL_2}; border-radius: 9px; }}
+QCalendarWidget QToolButton {{ background: transparent; border: none; padding: 6px 10px; font-weight: 700; }}
+QCalendarWidget QToolButton:hover {{ background: {ACCENT_DIM}; border-radius: 6px; }}
+QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+QCalendarWidget QAbstractItemView {{ background: {PANEL}; border: none; outline: 0; padding: 4px;
+    alternate-background-color: {PANEL}; selection-background-color: {ACCENT}; selection-color: #0d1020; }}
+QCalendarWidget QAbstractItemView:disabled {{ color: #5d6276; }}
 QLabel#title {{ font-size: 22pt; font-weight: 800; }}
 QLabel#subtitle, QLabel#muted {{ color: {MUTED}; }}
 QLabel#section {{ font-size: 12.5pt; font-weight: 700; }}

@@ -181,12 +181,12 @@ class SimpleEngine:
     name = "simple"
 
     def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
-        progress("Lecture du texte du PDF…")
+        progress("Lecture du texte du cours…")
         texts = page_texts(pdf)
         if not any(t.strip() for t in texts):
             from revise.models import ReviseError
-            raise ReviseError("Aucun texte dans ce PDF (diapositives scannées ?). "
-                              "L'application ne lit que le texte des PDF.")
+            raise ReviseError("Aucun texte dans ce cours (pages scannées ?). "
+                              "Sans IA, l'application ne lit que le texte.")
         cards: list[CardDraft] = []
         seen: set[str] = set()
         for n, text in enumerate(texts, start=1):

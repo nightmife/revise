@@ -139,6 +139,19 @@ def download(url: str, dest: Path, progress: Progress, label: str, expected: int
     return dest
 
 
+def installed() -> bool:
+    """Vrai si le modèle est déjà sur l'ordinateur (sinon, s'en servir lance un gros téléchargement)."""
+    custom = os.environ.get("REVISE_IA_MODELE", "")
+    if custom.endswith(".gguf"):
+        return Path(custom).expanduser().exists()
+    _, url, size = MODELS[pick_model()]
+    file = ia_dir() / url.rsplit("/", 1)[1]
+    try:
+        return file.stat().st_size == size
+    except OSError:
+        return False
+
+
 def model_path(progress: Progress) -> tuple[str, Path]:
     """Nom et fichier du modèle à utiliser, téléchargé au besoin."""
     custom = os.environ.get("REVISE_IA_MODELE", "")

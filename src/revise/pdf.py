@@ -1,4 +1,4 @@
-"""Lecture des PDF : texte par page et découpage en morceaux."""
+"""Lecture des cours : texte par page (PDF ici ; PowerPoint, Word et texte dans `documents.py`)."""
 
 from __future__ import annotations
 
@@ -39,6 +39,10 @@ def open_pdf(path: Path) -> PdfReader:
 
 
 def page_texts(path: Path) -> list[str]:
+    """Texte du cours, page par page (diapositive par diapositive pour un PowerPoint)."""
+    if path.suffix.lower() != ".pdf":
+        from revise import documents
+        return documents.page_texts(path)
     reader = open_pdf(path)
     out = []
     for page in reader.pages:
@@ -47,6 +51,54 @@ def page_texts(path: Path) -> list[str]:
         except Exception:  # page corrompue : on l'ignore plutôt que d'échouer
             out.append("")
     return out
+
+
+MIN_IMAGE_PIXELS = 200 * 150   # plus petit : puce, icône, filet décoratif
+LOW_TEXT_CHARS = 60
+
+
+def _page_images(page) -> set[int]:
+    """Identifiants des images assez grandes posées sur la page."""
+    found: set[int] = set()
+    try:
+        resources = page.get("/Resources")
+        xobjects = resources.get_object().get("/XObject") if resources is not None else None
+        if xobjects is None:
+            return found
+        for ref in xobjects.get_object().values():
+            obj = ref.get_object()
+            if obj.get("/Subtype") == "/Image" and int(obj.get("/Width", 0)) * int(obj.get("/Height", 0)) >= MIN_IMAGE_PIXELS:
+                found.add(getattr(ref, "idnum", id(obj)))
+    except Exception:  # PDF mal formé : on fait comme s'il n'y avait pas d'image
+        pass
+    return found
+
+
+def visual_pages(path: Path, texts: list[str]) -> set[int]:
+    """Numéros (à partir de 1) des pages qu'il faut *voir* pour les comprendre : pages scannées (une image,
+    presque pas de texte) et pages qui portent un schéma ou une photo. Une image répétée sur plus de la
+    moitié des pages (logo, fond du modèle de diapositives) ne compte pas comme un schéma."""
+    if path.suffix.lower() != ".pdf":
+        return set()
+    try:
+        images = [_page_images(page) for page in open_pdf(path).pages]
+    except ReviseError:
+        return set()
+    seen: dict[int, int] = {}
+    for ids in images:
+        for i in ids:
+            seen[i] = seen.get(i, 0) + 1
+    decoration = {i for i, n in seen.items() if len(images) >= 4 and n > len(images) / 2}
+    out = set()
+    for number, (ids, text) in enumerate(zip(images, texts), start=1):
+        if ids - decoration or (ids and len(text.strip()) < LOW_TEXT_CHARS):
+            out.add(number)
+    return out
+
+
+def pages_pdf(path: Path, first: int, last: int) -> bytes:
+    """Les pages `first` à `last` (numérotées à partir de 1) dans un nouveau PDF."""
+    return extract_pages(open_pdf(path), first - 1, last)
 
 
 def page_count(path: Path) -> int:

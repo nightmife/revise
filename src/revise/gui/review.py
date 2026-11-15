@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 from fsrs import Rating
@@ -11,9 +12,12 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QFrame, QLabel, 
                                QProgressBar, QPushButton, QSpinBox, QTextBrowser, QVBoxLayout, QWidget)
 
 from revise.db import Card, Database, deck_label, utcnow
+from revise.engines import distractors
+from revise.engines.explain import explain
 from revise.gui import theme
-from revise.gui.common import muted, row, save_cancel_buttons
-from revise.models import KINDS
+from revise.gui.common import confirm, muted, row, save_cancel_buttons
+from revise.gui.render import show_markdown
+from revise.models import KINDS, ReviseError
 from revise.scheduler import RATING_LABELS, Session, format_interval, preview
 
 KIND_LABEL = {"qa": "Question", "cloze": "Texte à trous", "code": "Code"}
@@ -69,6 +73,7 @@ def markdown_view(size: float) -> QTextBrowser:
 
 class ReviewPage(QWidget):
     finished = Signal()
+    explained = Signal(int, str, bool)  # numéro de la demande, texte, réussite (émis depuis le fil de l'IA)
 
     def __init__(self, db: Database):
         super().__init__()
@@ -82,6 +87,12 @@ class ReviewPage(QWidget):
         self.shown_at = 0.0
         self.started = 0.0
         self.labels: dict[int, str] = {}
+        self.subjects: dict[int, str] = {}
+        self.engine_factory = distractors.default_engine  # l'IA des imports
+        self.engine = None
+        self.ai_busy = False
+        self._request = 0  # change à chaque carte : une explication arrivée trop tard est ignorée
+        self.explained.connect(self._on_explained)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 20, 28, 20)
@@ -106,13 +117,16 @@ class ReviewPage(QWidget):
         self.kind = muted("")
         cl.addWidget(self.kind)
         self.question = markdown_view(18)
-        cl.addWidget(self.question, 3)
+        cl.addWidget(self.question, 4)
         self.sep = QFrame()
         self.sep.setFrameShape(QFrame.Shape.HLine)
         self.sep.setStyleSheet(f"color: {theme.BORDER};")
         cl.addWidget(self.sep)
         self.answer = markdown_view(15)
         cl.addWidget(self.answer, 4)
+        self.explanation = markdown_view(13)
+        self.explanation.setVisible(False)
+        cl.addWidget(self.explanation, 3)
         lay.addWidget(self.card_frame, 1)
 
         self.reveal_btn = QPushButton("Afficher la réponse  (Espace)")
@@ -143,20 +157,23 @@ class ReviewPage(QWidget):
         self.suspend_btn.setToolTip("La carte est mise de côté (touche S). Tu peux la réactiver depuis "
                                     "« Voir et corriger les cartes ».")
         self.suspend_btn.clicked.connect(self.suspend)
+        self.explain_btn = QPushButton("Explique-moi")
+        self.explain_btn.setToolTip("L'IA explique cette réponse avec d'autres mots et un exemple (touche X).")
+        self.explain_btn.clicked.connect(self.explain)
         self.back_btn = QPushButton("Retour aux cours")
         self.where.setMinimumWidth(10)
         self.back_btn.setObjectName("primary")
         self.back_btn.clicked.connect(self.finished.emit)
-        lay.addLayout(row(self.edit_btn, self.suspend_btn, None, self.back_btn))
+        lay.addLayout(row(self.edit_btn, self.suspend_btn, self.explain_btn, None, self.back_btn))
 
         # Raccourcis actifs seulement quand la page de révision a le focus.
         ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
         for key, fn in (("Space", self.reveal), ("Return", self.reveal), ("E", self.edit), ("S", self.suspend),
-                        ("Escape", self.finished.emit)):
+                        ("X", self.explain), ("Escape", self.finished.emit)):
             QShortcut(QKeySequence(key), self, activated=fn, context=ctx)
         for v in range(1, 5):
             QShortcut(QKeySequence(str(v)), self, activated=lambda v=v: self.rate(v), context=ctx)
-        for w in (self.question, self.answer):
+        for w in (self.question, self.answer, self.explanation):
             w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -167,6 +184,7 @@ class ReviewPage(QWidget):
         self.total = self.session.remaining
         self.started = time.monotonic()
         self.labels = {d.id: deck_label(d) for d in self.db.decks()}
+        self.subjects = {d.id: d.subject for d in self.db.decks()}
         self.progress.setVisible(exam)
         self.progress.setRange(0, max(1, self.total))
         self.next_card()
@@ -200,6 +218,9 @@ class ReviewPage(QWidget):
         self.revealed = False
         self.answer.setVisible(False)
         self.sep.setVisible(False)
+        self._request += 1
+        self.explanation.setVisible(False)
+        self.explain_btn.setVisible(False)
         has = self.card is not None
         for w in (self.edit_btn, self.suspend_btn):
             w.setVisible(has)
@@ -214,7 +235,7 @@ class ReviewPage(QWidget):
         section = f" · {c.section}" if c.section else ""
         self.where.setText(f"{self.labels.get(c.deck_id, '')}{page}{section}")
         self.kind.setText(KIND_LABEL.get(c.kind, "Question") + (" · nouvelle" if c.is_new else ""))
-        self.question.setMarkdown(c.question.replace("[...]", "**[ … ]**").replace("[…]", "**[ … ]**"))
+        show_markdown(self.question, c.question.replace("[...]", "**[ … ]**").replace("[…]", "**[ … ]**"))
         self._show_rating(False)
         self.update_counts()
         self.shown_at = time.monotonic()
@@ -223,7 +244,7 @@ class ReviewPage(QWidget):
         if self.card is None or self.revealed or not self.isVisible():
             return
         self.revealed = True
-        self.answer.setMarkdown(self.card.answer)
+        show_markdown(self.answer, self.card.answer)
         self.answer.setVisible(True)
         self.sep.setVisible(True)
         iv = preview(self.session.scheduler, self.card, utcnow())
@@ -231,6 +252,61 @@ class ReviewPage(QWidget):
             self.rate_btns[int(r)].setText(f"{RATING_LABELS[r]}\nrevient dans {format_interval(iv[r])}")
             self.rate_btns[int(r)].setToolTip(f"Touche {int(r)}")
         self._show_rating(True)
+        self.explain_btn.setVisible(True)
+        self.explain_btn.setEnabled(not self.ai_busy)
+
+    # ------------------------------------------------------------ explication
+    def explain(self) -> None:
+        """Demande à l'IA d'expliquer la réponse affichée (dans un fil : la page reste utilisable)."""
+        if self.card is None or not self.revealed or not self.isVisible() or self.ai_busy:
+            return
+        if self.engine is None and self.engine_factory is distractors.default_engine \
+                and distractors.default_engine_name() == "ia":
+            from revise.engines import embedded
+            if not embedded.installed() and not confirm(
+                    self, "Explique-moi", "L'explication est écrite par l'IA de cet ordinateur, qui n'est pas encore "
+                    "installée : il faut d'abord la télécharger (2,5 à 7 Go).\n\nTu peux aussi choisir une autre IA "
+                    "dans « Ajouter un cours ».", "Télécharger"):
+                return
+        self.ai_busy = True
+        self.explain_btn.setEnabled(False)
+        self.explanation.setMarkdown("*L'IA réfléchit…*")
+        self.explanation.setVisible(True)
+        request, card = self._request, self.card
+        subject, course = self.subjects.get(card.deck_id, ""), self.labels.get(card.deck_id, "")
+
+        def progress(message: str) -> None:
+            self.explained.emit(request, f"*{message}*", False)
+
+        def work() -> None:
+            try:
+                if self.engine is None:
+                    self.engine = self.engine_factory()
+                getattr(self.engine, "check", lambda: None)()
+                self.engine.progress = progress
+                text = explain(card.question, card.answer, subject, course, self.engine.chat)
+                self.explained.emit(request, text, True)
+            except ReviseError as e:
+                self.explained.emit(request, f"**Pas d'explication** : {e}", True)
+            except Exception as e:  # une panne de l'IA ne doit pas fermer l'application
+                self.explained.emit(request, f"**Pas d'explication** : erreur inattendue ({e})", True)
+        threading.Thread(target=work, name="revise-explication", daemon=True).start()
+
+    def _on_explained(self, request: int, text: str, final: bool) -> None:
+        if final:
+            self.ai_busy = False
+            self.explain_btn.setEnabled(True)
+        if request != self._request:  # l'utilisateur est déjà passé à une autre carte
+            return
+        if final:
+            show_markdown(self.explanation, f"**Explication de l'IA**\n\n{text}")
+        else:
+            self.explanation.setMarkdown(text)
+
+    def stop_engine(self) -> None:
+        """Arrête l'IA lancée pour les explications (sans effet s'il n'y en a pas)."""
+        engine, self.engine = self.engine, None
+        getattr(engine, "close", lambda: None)()
 
     def rate(self, value: int) -> None:
         if self.card is None or not self.revealed or not self.isVisible():
@@ -257,9 +333,9 @@ class ReviewPage(QWidget):
             fresh = self.db.card(self.card.id)
             self.card = fresh
             if fresh:
-                self.question.setMarkdown(fresh.question)
+                show_markdown(self.question, fresh.question)
                 if self.revealed:
-                    self.answer.setMarkdown(fresh.answer)
+                    show_markdown(self.answer, fresh.answer)
 
     def finish(self) -> None:
         minutes = (time.monotonic() - self.started) / 60

@@ -65,3 +65,32 @@ def test_chosen_for_traps_when_selected():
     config.save({"engine": "abonnement", "online_key": "abc"})
     assert distractors.default_engine_name() == "abonnement"
     assert isinstance(distractors.default_engine(), ClaudeCodeEngine)
+
+
+def test_chat_pdf_sends_the_document_without_any_tool():
+    import base64
+    calls = []
+
+    def runner(cmd, cwd, env, input, **kw):
+        calls.append((cmd, input))
+        lines = [{"type": "system", "subtype": "init"}, {"type": "assistant", "message": {}},
+                 {"type": "result", "subtype": "success", "is_error": False, "result": "x",
+                  "structured_output": {"title": "T", "cards": []}}]
+        return SimpleNamespace(returncode=0, stdout="\n".join(json.dumps(x) for x in lines), stderr="")
+
+    out = ClaudeCodeEngine(runner).chat_pdf("consignes", "message", b"%PDF-1.4 faux")
+    assert json.loads(out) == {"title": "T", "cards": []}
+    [(cmd, sent)] = calls
+    assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--input-format") + 1] == "stream-json"
+    message = json.loads(sent)
+    document, text = message["message"]["content"]
+    assert document["type"] == "document" and document["source"]["media_type"] == "application/pdf"
+    assert base64.b64decode(document["source"]["data"]) == b"%PDF-1.4 faux"
+    assert text == {"type": "text", "text": "message"}
+
+
+def test_stream_output_without_result_is_an_error():
+    def runner(cmd, cwd, env, input, **kw):
+        return SimpleNamespace(returncode=1, stdout='{"type": "system"}\npas du json', stderr="")
+    with pytest.raises(ReviseError):
+        ClaudeCodeEngine(runner).chat_pdf("s", "u", b"x")

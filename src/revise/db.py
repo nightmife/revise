@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS decks(
     source TEXT,
     sha256 TEXT UNIQUE,
     engine TEXT NOT NULL,
-    created TEXT NOT NULL
+    created TEXT NOT NULL,
+    exam_date TEXT             -- date de l'examen (AAAA-MM-JJ), NULL = pas de date
 );
 CREATE TABLE IF NOT EXISTS cards(
     id INTEGER PRIMARY KEY,
@@ -86,6 +87,7 @@ class Deck:
     source: str | None
     engine: str
     created: str
+    exam_date: str | None = None  # AAAA-MM-JJ
 
 
 @dataclass
@@ -133,6 +135,10 @@ class Database:
         if "distractors" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(cards)")}:
             with self.conn:
                 self.conn.execute("ALTER TABLE cards ADD COLUMN distractors TEXT")
+        # Bases créées avant la version 0.6 : pas de date d'examen.
+        if "exam_date" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(decks)")}:
+            with self.conn:
+                self.conn.execute("ALTER TABLE decks ADD COLUMN exam_date TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -340,13 +346,19 @@ class Database:
         with self.conn:
             self.conn.execute("UPDATE decks SET title = ?, subject = ? WHERE id = ?", (title, subject, deck_id))
 
+    def set_exam_date(self, deck_ids: list[int], exam_date: str | None) -> None:
+        """Date d'examen (AAAA-MM-JJ) de ces cours ; None l'enlève."""
+        with self.conn:
+            self.conn.executemany("UPDATE decks SET exam_date = ? WHERE id = ?",
+                                  [(exam_date, int(d)) for d in deck_ids])
+
     def reviews_since(self, since: datetime) -> list[sqlite3.Row]:
         return list(self.conn.execute("SELECT * FROM reviews WHERE ts >= ? ORDER BY ts", (iso(since),)))
 
     # ------------------------------------------------------------- conversions
     @staticmethod
     def _deck(r: sqlite3.Row) -> Deck:
-        return Deck(r["id"], r["subject"], r["title"], r["source"], r["engine"], r["created"])
+        return Deck(r["id"], r["subject"], r["title"], r["source"], r["engine"], r["created"], r["exam_date"])
 
     @staticmethod
     def _card(r: sqlite3.Row) -> Card:

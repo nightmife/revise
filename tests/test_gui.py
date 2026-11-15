@@ -287,3 +287,101 @@ def test_backup_dialog(qapp, db, tmp_path):
     assert [d.title for d in db.decks()] == ["Piles"]
     assert not BackupDialog(db, busy=True, parent=win).restore_btn.isEnabled()
     win.close()
+
+
+def test_formulas_and_code_colors(qapp):
+    from PySide6.QtGui import QTextCursor
+    from revise.gui.render import show_markdown
+    from revise.gui.review import markdown_view
+    view = markdown_view(14)
+    show_markdown(view, "Coût : $O(n^2)$\n\n```python\ndef f(x):\n    return 'a'  # fin\n```\n\n```\nsans langage\n```\n"
+                        "\n```langageinconnu\nx\n```")
+    text = view.toPlainText()
+    assert "O(n²)" in text and "$" not in text
+
+    def color_at(word: str) -> str:
+        cursor = QTextCursor(view.document())
+        cursor.setPosition(text.index(word) + 1)
+        return cursor.charFormat().foreground().color().name()
+    assert color_at("def") != color_at("x):")            # mot-clé coloré
+    assert color_at("'a'") not in (color_at("def"), color_at("x):"))
+    assert color_at("sans langage") == color_at("x):")    # pas de langage : pas de couleur, pas d'erreur
+
+
+def test_explain_button(qapp, db):
+    import time
+
+    from revise.models import ReviseError
+
+    def wait(cond):
+        for _ in range(300):
+            qapp.processEvents()
+            if cond():
+                return True
+            time.sleep(0.01)
+        return False
+
+    class FakeAI:
+        closed = False
+
+        def __init__(self):
+            self.asked = []
+
+        def chat(self, system, user, schema):
+            self.asked.append(user)
+            if "arbre" in user:
+                raise ReviseError("quota épuisé")
+            return '{"explanation": "Pense à une pile d\'assiettes : coût $O(1)$."}'
+
+        def close(self):
+            self.closed = True
+
+    deck = db.add_deck("Algo", "Piles", None, None, "simple",
+                       [CardDraft("qa", "Qu'est-ce qu'une pile ?", "Structure LIFO.", 1),
+                        CardDraft("qa", "Hauteur d'un arbre ?", "Plus long chemin.", 2)])
+    win = MainWindow(db)
+    win.show()
+    ai = FakeAI()
+    rv = win.review
+    rv.engine_factory = lambda: ai
+    win.start_review([deck], False, False, 20)
+    qapp.processEvents()
+    assert not rv.explain_btn.isVisible()                 # pas avant d'avoir vu la réponse
+    rv.explain()
+    assert ai.asked == [] and not rv.explanation.isVisible()
+    rv.reveal_btn.click()
+    assert rv.explain_btn.isVisible()
+    rv.explain_btn.click()
+    assert wait(lambda: not rv.ai_busy)
+    text = rv.explanation.toPlainText()
+    assert "pile d'assiettes" in text and "O(1)" in text and "$" not in text
+    assert "Qu'est-ce qu'une pile ?" in ai.asked[0] and "Structure LIFO." in ai.asked[0] and "Algo" in ai.asked[0]
+
+    rv.rate_btns[3].click()                               # carte suivante : l'explication disparaît
+    assert not rv.explanation.isVisible() and not rv.explain_btn.isVisible()
+    rv.reveal_btn.click()
+    rv.explain_btn.click()
+    assert wait(lambda: not rv.ai_busy)
+    assert "quota épuisé" in rv.explanation.toPlainText() and rv.explain_btn.isEnabled()   # erreur dite, pas de plantage
+
+    rv.explain_btn.click()                                # réponse qui arrive après qu'on a changé de carte
+    rv.rate_btns[3].click()
+    assert wait(lambda: not rv.ai_busy)
+    assert not rv.explanation.isVisible()
+    win.end_review()
+    assert ai.closed and rv.engine is None
+    win.close()
+
+
+def test_explain_parses_model_output():
+    from revise.engines.explain import SCHEMA, explain
+    from revise.models import ReviseError
+    seen = []
+
+    def chat(system, user, schema):
+        seen.append(schema)
+        return '```json\n{"explanation": "  Parce que.  "}\n```'
+    assert explain("Q", "R", "Algo", "CM1", chat) == "Parce que." and seen == [SCHEMA]
+    for bad in ("pas du json", "{}", '{"explanation": ""}', '{"explanation": 3}', "[]"):
+        with pytest.raises(ReviseError):
+            explain("Q", "R", "", "", lambda s, u, sc: bad)

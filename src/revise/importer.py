@@ -1,4 +1,4 @@
-"""Import d'un PDF : utilisé par la ligne de commande et par l'application graphique."""
+"""Import d'un cours (PDF, PowerPoint, Word, texte) : utilisé par la ligne de commande et par l'application graphique."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from revise import documents
 from revise.db import Database, file_sha256
 from revise.engines import Progress
 from revise.engines.simple import title_from_filename
@@ -49,6 +50,8 @@ def import_pdf(db: Database, engine, pdf: Path, subject: str | None, progress: P
     pdf = pdf.expanduser()
     if not pdf.is_file():
         raise ReviseError(f"Fichier introuvable : {pdf}")
+    if not documents.is_supported(pdf):
+        raise ReviseError(documents.unsupported_message(pdf))
     sha = file_sha256(pdf)
     existing = db.find_deck_by_hash(sha)
     if existing and not force:

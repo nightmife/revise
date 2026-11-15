@@ -314,3 +314,96 @@ def test_mac_folders(monkeypatch, tmp_path):
     monkeypatch.setattr(config.Path, "home", lambda: tmp_path)
     support = tmp_path / "Library" / "Application Support" / "revise"
     assert config.data_dir() == support and config.config_path() == support / "config.json"
+
+
+# ------------------------------------------------------- pages scannées, schémas
+
+def scanned_pdf(path, pages: int, big_image_on=(), logo: bool = False):
+    """PDF sans texte ; une grande image sur les pages `big_image_on`, un « logo » partout si demandé."""
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, NumberObject, StreamObject
+    w = PdfWriter()
+
+    def image(width, height):
+        s = StreamObject()
+        s[NameObject("/Type")] = NameObject("/XObject")
+        s[NameObject("/Subtype")] = NameObject("/Image")
+        s[NameObject("/Width")], s[NameObject("/Height")] = NumberObject(width), NumberObject(height)
+        s[NameObject("/ColorSpace")], s[NameObject("/BitsPerComponent")] = NameObject("/DeviceGray"), NumberObject(8)
+        s._data = b"\x00"
+        return w._add_object(s)
+    shared = image(400, 300) if logo else None
+    for n in range(1, pages + 1):
+        page = w.add_blank_page(width=595, height=842)
+        xobjects = DictionaryObject()
+        if shared is not None:
+            xobjects[NameObject("/Logo")] = shared
+        if n in big_image_on:
+            xobjects[NameObject("/Im1")] = image(1200, 900)
+        xobjects[NameObject("/Puce")] = image(16, 16)
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/XObject"): xobjects})
+    w.write(str(path))
+    return path
+
+
+def test_visual_pages_detects_scans_and_diagrams_but_not_logos(tmp_path):
+    from revise.pdf import visual_pages
+    text = "Une pile est une structure de données LIFO, le dernier arrivé est le premier sorti. " * 2
+    f = scanned_pdf(tmp_path / "a.pdf", 6, big_image_on=(2, 5), logo=True)
+    #  1 texte + logo · 2 schéma · 3 texte · 4 presque vide + logo · 5 scan sans texte · 6 texte
+    assert visual_pages(f, [text, text, text, "Merci", "", text]) == {2, 4, 5}
+    assert visual_pages(scanned_pdf(tmp_path / "b.pdf", 3), ["", "x", text]) == set()      # que des puces : rien à voir
+    assert visual_pages(tmp_path / "cours.pptx", ["", ""]) == set()
+
+
+def test_chunks_keep_visual_pages_apart():
+    pages = ["texte un", "", "schéma", "", "texte cinq", "texte six", ""]
+    assert prompt.text_chunks(pages) == [(1, 7, "=== Page 1 ===\ntexte un\n\n=== Page 3 ===\nschéma\n\n"
+                                                "=== Page 5 ===\ntexte cinq\n\n=== Page 6 ===\ntexte six")]
+    chunks = prompt.text_chunks(pages, {3, 4})
+    assert [(a, b) for a, b, _ in chunks] == [(1, 2), (3, 4), (5, 7)]
+    assert prompt.NO_TEXT in chunks[1][2] and "=== Page 4 ===" in chunks[1][2]
+    assert [(a, b) for a, b, _ in prompt.text_chunks(["", "", ""], {2, 3})] == [(2, 3)]      # tout scanné
+    many = prompt.text_chunks(["x"] * 15, set(range(1, 16)))
+    assert [(a, b) for a, b, _ in many] == [(1, 6), (7, 12), (13, 15)]
+
+
+def test_scanned_pdf_goes_through_chat_pdf(tmp_path, monkeypatch):
+    from pypdf import PdfReader
+    f = scanned_pdf(tmp_path / "scan.pdf", 3, big_image_on=(1, 2, 3))
+    monkeypatch.setattr(prompt, "page_texts", lambda p: ["", "", "Conclusion du cours sur les piles et les files, à retenir."])
+    sent = []
+
+    def chat_pdf(system, user, document):
+        sent.append((system, user, len(PdfReader(__import__("io").BytesIO(document)).pages)))
+        return json.dumps({"title": "Piles", "cards": [
+            {"kind": "qa", "question": "Que montre le schéma de la pile ?", "answer": "Le sommet est en haut.",
+             "page": 2, "section": "Piles"}]})
+
+    def chat(system, user):
+        raise AssertionError("une page à regarder ne doit pas partir en texte seul")
+    title, cards = prompt.generate_cards(f, "Algo", lambda m: None, chat, "IA", chat_pdf)
+    assert title == "Piles" and [(c.page, c.question) for c in cards] == [(2, "Que montre le schéma de la pile ?")]
+    [(system, user, n_pages)] = sent
+    assert n_pages == 3 and prompt.VISUAL_RULES in system and prompt.NO_TEXT in user
+    assert "sa première page est la page 1 du cours" in user
+
+    # Un moteur qui ne sait pas regarder : message clair pour un PDF entièrement scanné
+    monkeypatch.setattr(prompt, "page_texts", lambda p: ["", "", ""])
+    with pytest.raises(ReviseError, match="abonnement Claude"):
+        prompt.generate_cards(f, "Algo", lambda m: None, chat, "IA")
+
+
+def test_oversized_visual_chunk_is_sent_page_by_page(tmp_path, monkeypatch):
+    f = scanned_pdf(tmp_path / "gros.pdf", 2, big_image_on=(1, 2))
+    monkeypatch.setattr(prompt, "page_texts", lambda p: ["", "Texte de la page deux sur les arbres binaires."])
+    monkeypatch.setattr(prompt, "MAX_PDF_BYTES", 10)                      # tout est « trop lourd »
+    asked = []
+
+    def chat(system, user):
+        asked.append(user)
+        return json.dumps({"title": "T", "cards": [{"kind": "qa", "question": "Qu'est-ce qu'un arbre binaire ?",
+                                                     "answer": "Arbres binaires : deux fils au plus.", "page": 2,
+                                                     "section": ""}]})
+    _, cards = prompt.generate_cards(f, "Algo", lambda m: None, chat, "IA", lambda s, u, d: pytest.fail("trop lourd"))
+    assert len(asked) == 1 and "=== Page 2 ===" in asked[0] and len(cards) == 1    # la page 1, illisible, est laissée

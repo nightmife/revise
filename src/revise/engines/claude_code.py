@@ -5,6 +5,7 @@ soit installé et connecté sur la machine : l'application ne propose ce moteur 
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -55,8 +56,21 @@ class ClaudeCodeEngine:
                               "(commande `claude`, puis /login).")
 
     def chat(self, system: str, user: str, schema: dict = CARD_SCHEMA) -> str:
+        return self._ask(["--output-format", "json"], system, user, schema)
+
+    def chat_pdf(self, system: str, user: str, document: bytes, schema: dict = CARD_SCHEMA) -> str:
+        """Comme `chat`, avec un PDF joint que Claude regarde (pages scannées, schémas). Toujours sans outil :
+        le PDF est donné dans le message lui-même, Claude Code ne lit aucun fichier."""
+        message = {"type": "user", "message": {"role": "user", "content": [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                            "data": base64.b64encode(document).decode("ascii")}},
+            {"type": "text", "text": user}]}}
+        return self._ask(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"], system,
+                         json.dumps(message) + "\n", schema)
+
+    def _ask(self, formats: list[str], system: str, user: str, schema: dict) -> str:
         self.check()
-        cmd = [claude_binary(), "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+        cmd = [claude_binary(), "-p", *formats, "--json-schema", json.dumps(schema),
                "--system-prompt", system, "--tools", "", "--strict-mcp-config", "--disable-slash-commands",
                "--no-session-persistence"]
         if self.model:
@@ -71,11 +85,19 @@ class ClaudeCodeEngine:
             except OSError as e:
                 raise ReviseError(f"Impossible de lancer Claude Code ({e}).") from e
         out = (proc.stdout or "").strip()
-        try:
-            outer = json.loads(out.splitlines()[-1] if out else "")
-        except (json.JSONDecodeError, IndexError):
+        outer = None
+        for line in reversed(out.splitlines()):  # la réponse finale est la dernière ligne de type « result »
+            try:
+                found = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(found, dict) and (outer is None or found.get("type") == "result"):
+                outer = found
+                if found.get("type") == "result":
+                    break
+        if outer is None:
             detail = (proc.stderr or out or "pas de sortie").strip()[:400]
-            raise ReviseError(f"Claude Code a échoué (code {proc.returncode}) : {detail}") from None
+            raise ReviseError(f"Claude Code a échoué (code {proc.returncode}) : {detail}")
         if not isinstance(outer, dict) or outer.get("is_error") or outer.get("subtype") != "success":
             msg = str(outer.get("result") or outer.get("subtype") or "erreur inconnue")[:400] \
                 if isinstance(outer, dict) else "réponse inattendue"
@@ -90,6 +112,6 @@ class ClaudeCodeEngine:
     def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
         self.check()
         self.progress = progress
-        title, cards = generate_cards(pdf, subject, progress, self.chat, "Claude")
+        title, cards = generate_cards(pdf, subject, progress, self.chat, "Claude", self.chat_pdf)
         distractors.add_to_drafts(cards, subject, self.chat, progress, "Claude")
         return title, cards

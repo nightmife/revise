@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.review.start([int(d) for d in deck_ids], exam, include_known, new_per_day)
 
     def end_review(self) -> None:
+        if not self.review.ai_busy:
+            self.review.stop_engine()  # l'IA des explications ne reste pas en mémoire après la séance
         self.sidebar.setEnabled(True)
         self.show_page(self.COURSES)
 
@@ -193,6 +195,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e) -> None:
         workers = [w for w in (self.import_page.worker, self.quiz.worker) if w is not None]
+        if self.review.ai_busy:
+            workers.append(self.review)
         if workers:
             if not confirm(self, "L'IA travaille encore", "L'IA est en train de travailler. Quitter quand même ?\n"
                            "(ce qui est déjà terminé est enregistré)", "Quitter"):
@@ -203,6 +207,7 @@ class MainWindow(QMainWindow):
                 w.stop_engine()
             self.db.close()
             os._exit(0)  # le PDF en cours est abandonné ; sa transaction n'est pas validée
+        self.review.stop_engine()
         super().closeEvent(e)
 
 

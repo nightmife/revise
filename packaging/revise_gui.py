@@ -16,6 +16,10 @@ def selftest() -> int:
     if not net.ssl_context().cert_store_stats()["x509_ca"]:
         print("Aucun certificat HTTPS dans l'application.", file=sys.stderr)
         return 1
+    from pygments.lexers import get_lexer_by_name
+
+    for language in ("python", "c", "cpp", "java", "sql", "bash"):  # coloration du code des cartes
+        get_lexer_by_name(language)
     from PySide6.QtWidgets import QApplication
 
     from revise.db import Database

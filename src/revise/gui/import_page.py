@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFil
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
                                QWidget)
 
-from revise import config, share
+from revise import config, documents, share
 from revise.db import Database, file_sha256
 from revise.engines import online
 from revise.engines.claude_code import claude_binary
@@ -22,6 +22,7 @@ from revise.models import ReviseError
 PATH_ROLE = Qt.ItemDataRole.UserRole
 AUTO_SUBJECT = "Automatique (d'après le nom du fichier)"
 SEARCH_DIRS = ["Downloads", "Téléchargements", "Documents"]
+SCAN_SUFFIXES = (".pdf", ".pptx", ".docx")  # la recherche automatique laisse de côté les fichiers texte
 
 
 ENGINES = ("ia", "en-ligne", "simple", "abonnement")  # dans l'ordre des boutons radio
@@ -171,20 +172,21 @@ class ImportPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
         lay.addWidget(page_header("Ajouter un cours",
-                                  "Donne le PDF d'un cours : l'application en tire des cartes de révision, "
-                                  "une fiche et des QCM. Tu peux aussi donner un cours partagé (fichier .revise)."))
+                                  "Donne un cours (PDF, PowerPoint, Word ou texte) : l'application en tire des "
+                                  "cartes de révision, une fiche et des QCM. Un cours partagé (fichier .revise) "
+                                  "s'ajoute aussi ici."))
 
         self.drop = QFrame()
         self.drop.setObjectName("drop")
         dl = QHBoxLayout(self.drop)
         dl.setContentsMargins(20, 16, 20, 16)
-        drop_text = QLabel("Glisse tes PDF ici")
+        drop_text = QLabel("Glisse tes cours ici")
         drop_text.setObjectName("section")
-        add_btn = QPushButton("Choisir des PDF…")
+        add_btn = QPushButton("Choisir des fichiers…")
         add_btn.setObjectName("primary")
         add_btn.clicked.connect(self.browse)
         self.scan_btn = QPushButton("Chercher sur cet ordinateur")
-        self.scan_btn.setToolTip("Liste les PDF des dossiers Téléchargements et Documents.")
+        self.scan_btn.setToolTip("Liste les PDF, PowerPoint et Word des dossiers Téléchargements et Documents.")
         self.scan_btn.clicked.connect(lambda: self.scan())
         dl.addWidget(drop_text)
         dl.addWidget(muted("ou"))
@@ -194,7 +196,7 @@ class ImportPage(QWidget):
         lay.addWidget(self.drop)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Rechercher un PDF dans la liste…")
+        self.search.setPlaceholderText("Rechercher un fichier dans la liste…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter)
         self.count_label = muted("")
@@ -228,7 +230,8 @@ class ImportPage(QWidget):
                            "et le texte du cours est envoyé sur Internet.",
             self.r_simple: "Immédiat, mais cartes approximatives à corriger et QCM facile.",
             self.r_claude: "Rapide et de très bonne qualité, sans clé : passe par Claude Code, installé et connecté "
-                           "sur cet ordinateur. Compte dans les limites de ton abonnement.",
+                           "sur cet ordinateur. Lit aussi les pages scannées et les schémas des PDF. "
+                           "Compte dans les limites de ton abonnement.",
         }
         has_claude = claude_binary() is not None  # proposé seulement à ceux qui ont Claude Code
         for i, r in enumerate((self.r_ia, self.r_online, self.r_simple, self.r_claude)):
@@ -256,7 +259,7 @@ class ImportPage(QWidget):
         self.import_btn.setObjectName("primary")
         self.import_btn.setMinimumHeight(46)
         self.import_btn.clicked.connect(self.start)
-        self.cancel_btn = QPushButton("Arrêter après ce PDF")
+        self.cancel_btn = QPushButton("Arrêter après ce cours")
         self.cancel_btn.clicked.connect(self.cancel)
         self.cancel_btn.setVisible(False)
         self.status = muted("")
@@ -296,7 +299,7 @@ class ImportPage(QWidget):
     def add_file(self, path: Path, checked: bool = False) -> None:
         path = path.resolve()
         shared = share.is_share_file(path)
-        if str(path) in self._known_paths() or not (shared or path.suffix.lower() == ".pdf") or not path.is_file():
+        if str(path) in self._known_paths() or not (shared or documents.is_supported(path)) or not path.is_file():
             return
         done = not shared and self.db.find_deck_by_hash(file_sha256(path)) is not None
         label = path.name + ("   ✓ déjà ajouté" if done else
@@ -332,7 +335,8 @@ class ImportPage(QWidget):
         for d in SEARCH_DIRS if search else []:
             base = home / d
             if base.is_dir():
-                found += [p for p in base.rglob("*.pdf") if len(p.relative_to(base).parts) <= 3]
+                found += [p for p in base.rglob("*") if p.suffix.lower() in SCAN_SUFFIXES
+                          and len(p.relative_to(base).parts) <= 3 and not p.name.startswith(("~$", "."))]
         found = sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)[:300]  # les plus récents
         for p in reversed(checked):  # les PDF choisis à la main restent, même hors des dossiers habituels
             self.add_file(p, checked=True)
@@ -350,7 +354,9 @@ class ImportPage(QWidget):
     def browse(self) -> None:
         start = str(Path.home() / "Downloads") if (Path.home() / "Downloads").is_dir() else str(Path.home())
         paths, _ = QFileDialog.getOpenFileNames(self, "Choisir des cours", start,
-                                                "Cours (*.pdf *.revise);;PDF (*.pdf);;Cours partagés (*.revise)")
+                                                "Cours (*.pdf *.pptx *.docx *.txt *.md *.revise);;PDF (*.pdf);;"
+                                                "PowerPoint (*.pptx);;Word (*.docx);;Texte (*.txt *.md);;"
+                                                "Cours partagés (*.revise)")
         for p in paths:
             self.add_file(Path(p), checked=True)
         self._update_count()
@@ -373,7 +379,7 @@ class ImportPage(QWidget):
         for url in e.mimeData().urls():
             p = Path(url.toLocalFile())
             if p.is_dir():
-                for f in sorted(p.rglob("*.pdf")):
+                for f in sorted(f for f in p.rglob("*") if f.suffix.lower() in SCAN_SUFFIXES):
                     self.add_file(f, checked=True)
             else:
                 self.add_file(p, checked=True)
@@ -390,9 +396,9 @@ class ImportPage(QWidget):
     def _update_count(self, *_):
         n = len(self.selected_paths())
         if n:
-            self.count_label.setText(f"{n} PDF coché{'s' if n > 1 else ''}")
+            self.count_label.setText(f"{n} fichier{'s' if n > 1 else ''} coché{'s' if n > 1 else ''}")
         else:
-            self.count_label.setText("Coche les PDF à transformer" if self.files.count() else "Aucun PDF choisi")
+            self.count_label.setText("Coche les cours à transformer" if self.files.count() else "Aucun fichier choisi")
         self.import_btn.setEnabled(n > 0 and self._thread is None)
         self.import_btn.setText(f"Créer les cartes de {n} cours" if n > 1 else "Créer les cartes")
 
@@ -444,7 +450,7 @@ class ImportPage(QWidget):
         if self.worker:
             self.worker.cancelled = True
             self.cancel_btn.setEnabled(False)
-            self.status.setText("Arrêt après le PDF en cours…")
+            self.status.setText("Arrêt après le cours en train d'être lu…")
 
     def _file_done(self, name: str, msg: str, ok: bool) -> None:
         self.progress.setValue(self.progress.value() + 1)

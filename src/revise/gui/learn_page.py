@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QComboBox, QFrame, QListWidget, QPushButton, QSpli
 
 from revise.db import Card, Database, deck_label
 from revise.gui.common import fill_scope_combo, muted, page_header, row, select_scope
+from revise.gui.render import show_markdown
 from revise.gui.review import markdown_view
 
 NO_SECTION = "Sans titre de partie"
@@ -112,7 +113,7 @@ class LearnPage(QWidget):
             pages = sorted({c.page for c in group if c.page})
             where = f"*p. {pages[0]}*" if len(pages) == 1 else f"*p. {pages[0]} à {pages[-1]}*" if pages else ""
             body = "\n\n---\n\n".join(card_markdown(c) for c in group)
-            self.view.setMarkdown(f"## {name}\n\n{where}\n\n{body}")
+            show_markdown(self.view, f"## {name}\n\n{where}\n\n{body}")
             self.view.verticalScrollBar().setValue(0)
         self._update_nav()
 

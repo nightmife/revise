@@ -9,10 +9,12 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QComboBox, QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSpinBox,
                                QStackedWidget, QVBoxLayout, QWidget)
 
+from revise import mathtext
 from revise.db import Card, Database, deck_label
 from revise.engines import distractors
 from revise.gui import theme
 from revise.gui.common import cloze_question, confirm, fill_scope_combo, muted, page_header, row, select_scope
+from revise.gui.render import show_markdown
 from revise.gui.review import markdown_view
 from revise.models import ReviseError
 from revise.quiz import QuizQuestion, build_quiz, prepared_count, usable_count
@@ -77,7 +79,7 @@ class ChoiceCard(QFrame):
         self.active = True
 
     def set_choice(self, text: str) -> None:
-        self.text.setText(text)
+        self.text.setText(mathtext.render(text))
         self.set_state("")
         self.active = True
 
@@ -378,7 +380,7 @@ class QuizPage(QWidget):
         if c.section:
             where += f" · {c.section}"
         self.where.setText(where)
-        self.question.setMarkdown(cloze_question(c.question))
+        show_markdown(self.question, cloze_question(c.question))
         for i, widget in enumerate(self.choices):
             widget.setVisible(i < len(q.choices))
             if i < len(q.choices):
@@ -442,7 +444,7 @@ class QuizPage(QWidget):
         for q, chosen in self.mistakes:
             parts.append(f"**{cloze_question(q.card.question)}**\n\n"
                          f"Ta réponse : {q.choices[chosen]}\n\nLa bonne réponse : {q.card.answer}")
-        self.review_view.setMarkdown("\n\n---\n\n".join(parts))
+        show_markdown(self.review_view, "\n\n---\n\n".join(parts))
         self.review_view.setVisible(bool(self.mistakes))
         self.retry_btn.setVisible(bool(self.mistakes))
         self.pages.setCurrentIndex(2)
