@@ -18,6 +18,20 @@ def isolated_settings(tmp_path: Path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """Une seule application Qt pour toute la série de tests (hors écran), gardée jusqu'à la fin."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from revise.gui import theme
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(theme.QSS)
+    return app
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
     d = Database(tmp_path / "test.db")

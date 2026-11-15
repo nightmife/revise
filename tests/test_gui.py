@@ -15,13 +15,6 @@ from revise.gui.app import MainWindow
 from revise.models import CardDraft
 
 
-@pytest.fixture(scope="module")
-def qapp():
-    app = QApplication.instance() or QApplication([])
-    app.setStyleSheet(theme.QSS)
-    return app
-
-
 def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     d1 = db.add_deck("LIFAPSD", "Les piles", "/dl/[LIFAPSD] CM8 - Pile et file.pdf", None, "abonnement",
                      [CardDraft("qa", "Qu'est-ce qu'une **pile** ?", "Structure LIFO.", 3),

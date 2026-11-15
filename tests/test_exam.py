@@ -51,12 +51,8 @@ def test_exam_date_is_stored_and_old_databases_are_upgraded(tmp_path):
     db.close()
 
 
-def test_courses_page_plans_new_cards_for_the_exam(db):
-    pytest.importorskip("PySide6")
-    from PySide6.QtWidgets import QApplication
-
+def test_courses_page_plans_new_cards_for_the_exam(qapp, db):
     from revise.gui.courses import CoursesPage
-    app = QApplication.instance() or QApplication([])
     deck = db.add_deck("Algo", "Piles", None, None, "simple", [CardDraft("qa", f"Question {i} ?", "R") for i in range(90)])
     other = db.add_deck("Algo", "Files", None, None, "simple", [CardDraft("qa", "Q ?", "R")])
     page = CoursesPage(db)
@@ -88,4 +84,5 @@ def test_courses_page_plans_new_cards_for_the_exam(db):
     assert page.tree.topLevelItem(0).child(0).text(5) == "passé" and page.exam_plan([deck, other]) == (0, None)
     page.set_exam_date(None)
     assert page.tree.topLevelItem(0).child(0).text(5) == ""
-    app.processEvents()
+    page.close()
+    qapp.processEvents()

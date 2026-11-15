@@ -21,7 +21,11 @@ jobs:
       - name: Dépendances
         run: pip install ".[dev]" pyinstaller pillow
       - name: Tests
-        run: pytest -q
+        shell: pwsh
+        run: |
+          python -X faulthandler -m pytest -q
+          Write-Host "pytest : code $LASTEXITCODE"
+          exit $LASTEXITCODE
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Icône
