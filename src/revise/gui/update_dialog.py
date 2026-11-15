@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import threading
-
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 from revise import selfupdate, updates
-from revise.gui.common import muted, row
+from revise.gui.common import Background, muted, row
 from revise.models import ReviseError
 
 
 class UpdateDialog(QDialog):
-    progressed = Signal(int, int)
-    finished_ok = Signal(str, str)  # type d'application, chemin à relancer
-    failed = Signal(str)
-
     def __init__(self, release: updates.Release, parent=None, installer=selfupdate.install):
         super().__init__(parent)
         self.release = release
@@ -50,9 +44,7 @@ class UpdateDialog(QDialog):
         self.install_btn.setObjectName("primary")
         self.install_btn.clicked.connect(self.start)
         lay.addLayout(row(self.page_btn, None, self.cancel_btn, self.install_btn))
-        self.progressed.connect(self._on_progress)
-        self.finished_ok.connect(self._on_done)
-        self.failed.connect(self._on_failed)
+        self.job = Background(self, self._on_message)
 
     def open_page(self) -> None:
         QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_PAGE))
@@ -68,15 +60,20 @@ class UpdateDialog(QDialog):
         self.bar.setVisible(True)
         self.text.setText("Téléchargement…")
 
-        def work() -> None:
+        def work(post) -> None:
             try:
-                kind, target = self.installer(self.release, self.progressed.emit, cancelled=lambda: self._cancel)
-                self.finished_ok.emit(kind, str(target))
+                kind, target = self.installer(self.release, lambda done, total: post(("progress", done, total)),
+                                              cancelled=lambda: self._cancel)
+                post(("done", kind, str(target)))
             except ReviseError as e:
-                self.failed.emit(str(e))
+                post(("failed", str(e)))
             except Exception as e:  # ne jamais laisser la fenêtre bloquée sur « Téléchargement… »
-                self.failed.emit(f"erreur inattendue : {e}")
-        threading.Thread(target=work, name="revise-installation", daemon=True).start()
+                post(("failed", f"erreur inattendue : {e}"))
+        self.job.start(work)
+
+    def _on_message(self, message) -> None:
+        what, *values = message
+        {"progress": self._on_progress, "done": self._on_done, "failed": self._on_failed}[what](*values)
 
     def _on_progress(self, done: int, total: int) -> None:
         self.bar.setRange(0, total)

@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import sys
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import QLibraryInfo, QTranslator, QUrl, Signal
+from PySide6.QtCore import QLibraryInfo, QTranslator, QUrl
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
                                QPushButton, QStackedWidget, QVBoxLayout, QWidget)
@@ -16,7 +15,7 @@ from revise.db import Database
 from revise.gui import theme
 from revise.gui.backup_dialog import BackupDialog
 from revise.gui.cards_dialog import CardsDialog
-from revise.gui.common import confirm
+from revise.gui.common import Background, confirm
 from revise.gui.courses import CoursesPage
 from revise.gui.import_page import ImportPage
 from revise.gui.learn_page import LearnPage
@@ -28,7 +27,6 @@ from revise.gui.update_dialog import UpdateDialog
 
 class MainWindow(QMainWindow):
     COURSES, LEARN, QUIZ, IMPORT, STATS = range(5)  # index des pages = identifiants des boutons
-    update_found = Signal(object)  # updates.Release, émis depuis le fil qui interroge Internet
 
     def __init__(self, db: Database):
         super().__init__()
@@ -79,7 +77,7 @@ class MainWindow(QMainWindow):
         self.update_btn.setVisible(False)
         self.update_btn.clicked.connect(self.install_update)
         self.release: updates.Release | None = None
-        self.update_found.connect(self.show_update)
+        self.update_check = Background(self, self.show_update)
         sl.addWidget(self.update_btn)
         self.backup_btn = QPushButton("Sauvegarde…")
         self.backup_btn.setObjectName("side")
@@ -142,15 +140,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ mise à jour
     def check_updates(self, opener=None) -> None:
         """Demande en arrière-plan s'il existe une version plus récente ; sans réponse, il ne se passe rien."""
-        def work() -> None:
+        def work(post) -> None:
             release = updates.available_update(opener) if opener else updates.available_update()
             if release:
-                try:
-                    self.update_found.emit(release)
-                except RuntimeError:  # fenêtre déjà fermée
-                    pass
+                post(release)
             selfupdate.cleanup_leftovers()  # l'ancienne version, gardée le temps de la dernière mise à jour
-        threading.Thread(target=work, name="revise-maj", daemon=True).start()
+        self.update_check.start(work)
 
     def show_update(self, release: updates.Release) -> None:
         self.release = release

@@ -29,7 +29,15 @@ def qapp():
     from revise.gui import theme
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(theme.QSS)
-    return app
+    yield app
+    # Fermeture dans l'ordre : les fenêtres disparaissent avant l'application, pas pendant l'arrêt de Python.
+    import gc
+    for widget in app.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+    gc.collect()
+    app.processEvents()
 
 
 @pytest.fixture

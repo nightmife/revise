@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 import time
 
 from fsrs import Rating
@@ -15,7 +14,7 @@ from revise.db import Card, Database, deck_label, utcnow
 from revise.engines import distractors
 from revise.engines.explain import explain
 from revise.gui import theme
-from revise.gui.common import confirm, muted, row, save_cancel_buttons
+from revise.gui.common import Background, confirm, muted, row, save_cancel_buttons
 from revise.gui.render import show_markdown
 from revise.models import KINDS, ReviseError
 from revise.scheduler import RATING_LABELS, Session, format_interval, preview
@@ -73,7 +72,6 @@ def markdown_view(size: float) -> QTextBrowser:
 
 class ReviewPage(QWidget):
     finished = Signal()
-    explained = Signal(int, str, bool)  # numéro de la demande, texte, réussite (émis depuis le fil de l'IA)
 
     def __init__(self, db: Database):
         super().__init__()
@@ -92,7 +90,7 @@ class ReviewPage(QWidget):
         self.engine = None
         self.ai_busy = False
         self._request = 0  # change à chaque carte : une explication arrivée trop tard est ignorée
-        self.explained.connect(self._on_explained)
+        self.ai_job = Background(self, lambda message: self._on_explained(*message))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 20, 28, 20)
@@ -275,22 +273,19 @@ class ReviewPage(QWidget):
         request, card = self._request, self.card
         subject, course = self.subjects.get(card.deck_id, ""), self.labels.get(card.deck_id, "")
 
-        def progress(message: str) -> None:
-            self.explained.emit(request, f"*{message}*", False)
-
-        def work() -> None:
+        def work(post) -> None:
             try:
                 if self.engine is None:
                     self.engine = self.engine_factory()
                 getattr(self.engine, "check", lambda: None)()
-                self.engine.progress = progress
+                self.engine.progress = lambda message: post((request, f"*{message}*", False))
                 text = explain(card.question, card.answer, subject, course, self.engine.chat)
-                self.explained.emit(request, text, True)
+                post((request, text, True))
             except ReviseError as e:
-                self.explained.emit(request, f"**Pas d'explication** : {e}", True)
+                post((request, f"**Pas d'explication** : {e}", True))
             except Exception as e:  # une panne de l'IA ne doit pas fermer l'application
-                self.explained.emit(request, f"**Pas d'explication** : erreur inattendue ({e})", True)
-        threading.Thread(target=work, name="revise-explication", daemon=True).start()
+                post((request, f"**Pas d'explication** : erreur inattendue ({e})", True))
+        self.ai_job.start(work)
 
     def _on_explained(self, request: int, text: str, final: bool) -> None:
         if final:

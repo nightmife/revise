@@ -59,6 +59,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - La vérification des mises à jour part de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
 - `generate_cards(…, chat_pdf=None)` : un moteur qui sait regarder un PDF passe son `chat_pdf` ; les autres ne reçoivent que du texte.
 - Le build (`release.yml`) essaie pour de vrai la mise à jour automatique : `revise --install-from <fichier>` puis `--selftest` et `--cleanup-update`.
+- Travail en arrière-plan dans l'interface : `common.Background` (file de messages vidée par une minuterie). Ne jamais émettre un signal Qt ni toucher un widget depuis un `threading.Thread` : plantage aléatoire à la fermeture (vu sur Windows et Mac).
 - Un fichier `.revise` vient d'un inconnu : ne jamais lui faire confiance (types, tailles) ; changer le format = incrémenter `share.FORMAT_VERSION`.
 - Tout doit marcher sous Windows et macOS (pas de chemin ou de commande propre à Linux hors `cli.cmd_shortcut`).
 - Sur Mac, ne jamais lire Téléchargements/Documents sans action de l'utilisateur (demande d'autorisation du système).

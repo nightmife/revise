@@ -2,11 +2,56 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import queue
+import threading
+from collections.abc import Callable
+
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout,
                                QWidget)
 
 from revise.db import Database, deck_label
+
+
+class Background(QObject):
+    """Travail dans un fil Python, résultats livrés dans le fil de l'interface.
+
+    Le fil ne touche jamais à Qt : il dépose ses messages dans une file, qu'une minuterie de l'interface
+    vide. (Émettre un signal Qt depuis un fil Python fait créer à Qt des objets pour ce fil, détruits dans
+    le désordre à la fermeture : plantage à la sortie sur certains systèmes.)"""
+
+    def __init__(self, parent: QObject, on_message: Callable[[object], None]):
+        super().__init__(parent)
+        self.on_message = on_message
+        self.messages: queue.SimpleQueue = queue.SimpleQueue()
+        self.running = 0
+        self.timer = QTimer(self)
+        self.timer.setInterval(40)
+        self.timer.timeout.connect(self.drain)
+
+    def start(self, work: Callable[[Callable[[object], None]], None]) -> None:
+        """Lance `work(post)` ; chaque `post(message)` arrive à `on_message` dans le fil de l'interface."""
+        def run() -> None:
+            try:
+                work(self.messages.put)
+            finally:
+                self.messages.put(Background)  # marque de fin
+        self.running += 1
+        self.timer.start()
+        threading.Thread(target=run, name="revise-arriere-plan", daemon=True).start()
+
+    def drain(self) -> None:
+        while True:
+            try:
+                message = self.messages.get_nowait()
+            except queue.Empty:
+                return
+            if message is Background:
+                self.running -= 1
+                if self.running <= 0:
+                    self.timer.stop()
+            else:
+                self.on_message(message)
 
 
 def page_header(title: str, subtitle: str = "") -> QWidget:
