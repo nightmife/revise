@@ -71,6 +71,15 @@ Dans l'application :
 - Révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien, `4` facile,
   `E` corriger la carte, `S` ne plus la poser, `Échap` terminer.
 - **Mes progrès** : série, réponses justes, régularité, prévisions.
+- **Partager…** (dans Mes cours) : enregistre les cours cochés dans un fichier `.revise` à envoyer à quelqu'un, qui
+  le glisse dans « Ajouter un cours » — sans IA ni attente. Les cartes et les réponses pièges sont partagées, pas ta
+  progression. Le même bouton exporte aussi vers Anki (fichier texte, Fichier → Importer dans Anki).
+- **Sauvegarde…** (en bas à gauche) : copie tous tes cours et ta progression dans un fichier, ou les reprend d'une
+  sauvegarde (changement d'ordinateur). Avant une restauration, les données remplacées sont gardées dans
+  `avant-restauration.db`, à côté de la base.
+- **Mises à jour** : au lancement, l'application regarde s'il existe une version plus récente sur GitHub et affiche
+  un bouton en bas à gauche pour la télécharger. Rien n'est envoyé ; pour couper la vérification, mets
+  `"check_updates": false` dans le fichier de réglages.
 
 En ligne de commande (sans interface) :
 
@@ -80,6 +89,10 @@ revise reviser --cours CM7 CM8 --examen
 revise pieges --cours CM7                            # réponses pièges des QCM d'un cours déjà importé
 revise pieges --moteur abonnement                    # … pour tous les cours, avec l'abonnement Claude
 revise stats
+revise partager algo.revise --cours CM7 CM8          # cours à envoyer à quelqu'un (--anki : fichier pour Anki)
+revise importer algo.revise                          # ajouter un cours partagé
+revise sauvegarder ~/revise-sauvegarde.db            # tout mettre à l'abri
+revise restaurer ~/revise-sauvegarde.db              # tout reprendre d'une sauvegarde
 ```
 
 Données : `~/.local/share/revise/revise.db` (SQLite) ; sur Mac `~/Library/Application Support/revise/revise.db`.

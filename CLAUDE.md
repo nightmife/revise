@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (54), GUI en offscreen
+.venv/bin/pytest -q                              # tests (92), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -19,7 +19,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 
 | Fichier | Rôle |
 |---|---|
-| `db.py` | SQLite : tables `decks`, `cards`, `reviews` ; classe `Database` ; une seule migration, faite à l'ouverture (`cards.distractors`) |
+| `db.py` | SQLite : tables `decks`, `cards`, `reviews` ; classe `Database` ; une seule migration (`_migrate`, `cards.distractors`) ; `backup_to` / `restore_from` (sauvegarde vérifiée, copie de secours `avant-restauration.db`) |
+| `share.py` | partage : `export_courses` / `import_file` (fichier `.revise` = JSON, sans progression ni chemin personnel ; contenu reçu vérifié champ par champ), `export_anki` |
+| `updates.py` | `available_update()` : dernière Release GitHub comparée à `__version__` ; anonyme, erreurs ignorées ; réglage `check_updates` |
 | `models.py` | `CardDraft` (kind qa/cloze/code, question, answer, page, section, distractors), `ReviseError` (message affiché tel quel) |
 | `config.py` | `data_dir()` (`~/.local/share/revise` ; Mac : `~/Library/Application Support/revise`), réglages JSON (`~/.config/revise/config.json`, `%APPDATA%` sous Windows, dossier de données sur Mac) |
 | `pdf.py` | texte page par page (pypdf) |
@@ -35,7 +37,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `quiz.py` | QCM : `build_quiz` ; mauvaises réponses = `Card.distractors` (IA), sinon réponses des cartes les plus ressemblantes |
 | `stats.py`, `editfmt.py`, `tui.py`, `cli.py` | stats, édition Markdown, révision en terminal (Textual), commandes |
 | `gui/app.py` | `MainWindow` : barre latérale + `QStackedWidget` ; index `COURSES, LEARN, QUIZ, IMPORT, STATS` (l'ordre du menu est différent) ; `open_with` ouvre fiche/QCM sur les cours cochés |
-| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; `common.py` (helpers, `ActionCard`, `confirm`), `theme.py` (couleurs, QSS, icône dessinée) |
+| `gui/backup_dialog.py` | fenêtre « Sauvegarde » (bouton en bas de la barre latérale) |
+| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`), `theme.py` (couleurs, QSS, icône dessinée) |
 | `packaging/revise_gui.py` | point d'entrée des exécutables ; `make_icon.py` ; `INSTALLATION.md` = notes de la Release ; `.github/workflows/release.yml` : tests, PyInstaller (exe Windows, .dmg Mac arm64 + Intel), Release |
 
 ## Conventions
@@ -47,6 +50,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - Erreurs utilisateur : lever `ReviseError` avec un message en français.
 - Les tests n'utilisent ni le réseau ni les réglages réels (fixture `isolated_settings` dans `tests/conftest.py`) ; les moteurs IA reçoivent de faux `chat`/`post`/`opener`.
 - Le QCM et « Apprendre » ne modifient jamais le planning FSRS.
+- La vérification des mises à jour part de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
+- Un fichier `.revise` vient d'un inconnu : ne jamais lui faire confiance (types, tailles) ; changer le format = incrémenter `share.FORMAT_VERSION`.
 - Tout doit marcher sous Windows et macOS (pas de chemin ou de commande propre à Linux hors `cli.cmd_shortcut`).
 - Sur Mac, ne jamais lire Téléchargements/Documents sans action de l'utilisateur (demande d'autorisation du système).
 - Boîtes de dialogue : `common.confirm` et `save_cancel_buttons` (boutons en français), pas `QMessageBox.question`.

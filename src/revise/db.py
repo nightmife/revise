@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from revise.config import data_dir
-from revise.models import CardDraft
+from revise.models import CardDraft, ReviseError
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS decks(
@@ -125,6 +125,9 @@ class Database:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self._migrate()
+
+    def _migrate(self) -> None:
         self.conn.executescript(SCHEMA)
         # Bases créées avant la version 0.4 : la colonne des mauvaises réponses de QCM n'existe pas.
         if "distractors" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(cards)")}:
@@ -133,6 +136,68 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    # ------------------------------------------------------------ sauvegarde
+    def backup_to(self, dest: Path) -> None:
+        """Copie complète de la base (cours, cartes, progression) dans un fichier."""
+        dest = Path(dest)
+        if str(self.path) != ":memory:" and dest.resolve() == Path(self.path).resolve():
+            raise ReviseError("Choisis un autre fichier : celui-ci est la base utilisée par l'application.")
+        tmp = dest.with_name(dest.name + ".tmp")
+        try:
+            tmp.unlink(missing_ok=True)
+            out = sqlite3.connect(str(tmp))
+            try:
+                self.conn.backup(out)
+            finally:
+                out.close()
+            os.replace(tmp, dest)  # jamais de sauvegarde à moitié écrite
+        except (OSError, sqlite3.Error) as e:
+            tmp.unlink(missing_ok=True)
+            raise ReviseError(f"Sauvegarde impossible dans {dest.name} ({e})") from e
+
+    def restore_from(self, src: Path) -> Path | None:
+        """Remplace tout le contenu de la base par celui d'une sauvegarde (vérifiée avant d'y toucher).
+        Les données remplacées sont d'abord copiées dans « avant-restauration.db », à côté de la base :
+        renvoie ce fichier (None s'il n'a pas été écrit)."""
+        src = Path(src)
+        if not src.is_file():
+            raise ReviseError(f"Fichier introuvable : {src}")
+        if str(self.path) != ":memory:" and src.resolve() == Path(self.path).resolve():
+            raise ReviseError("Ce fichier est déjà la base utilisée par l'application.")
+        bad = ReviseError(f"{src.name} n'est pas une sauvegarde de revise.")
+        try:
+            source = sqlite3.connect(f"{src.resolve().as_uri()}?mode=ro", uri=True)
+        except sqlite3.Error as e:
+            raise bad from e
+        try:
+            try:
+                tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                columns = {r[1] for r in source.execute("PRAGMA table_info(cards)")}
+                healthy = source.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+            except sqlite3.Error as e:
+                raise bad from e
+            needed = {"deck_id", "kind", "question", "answer", "fsrs", "due", "suspended"}
+            if not {"decks", "cards", "reviews"} <= tables or not needed <= columns:
+                raise bad
+            if not healthy:
+                raise ReviseError(f"{src.name} est abîmé : la restauration est annulée.")
+            previous = None
+            if str(self.path) != ":memory:":
+                previous = Path(self.path).with_name("avant-restauration.db")
+                if previous.resolve() == src.resolve():
+                    previous = None  # on restaure justement cette copie : ne pas l'écraser pendant sa lecture
+                else:
+                    self.backup_to(previous)
+            try:
+                source.backup(self.conn)
+            except sqlite3.Error as e:
+                raise ReviseError(f"Restauration impossible ({e}). Tes données n'ont pas été modifiées.") from e
+        finally:
+            source.close()
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        self._migrate()
+        return previous
 
     # ---------------------------------------------------------------- paquets
     def find_deck_by_hash(self, sha: str) -> Deck | None:

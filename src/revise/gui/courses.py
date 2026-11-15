@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QFrame, QHeaderView, QLabel, QPushButton, QSpinBox,
-                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+import re
+from pathlib import Path
 
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFrame, QHeaderView, QLabel, QMessageBox, QPushButton,
+                               QSpinBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+
+from revise import share
 from revise.db import Database, deck_label, parse_iso, utcnow
 from revise.gui.common import ActionCard, confirm, muted, page_header, row
+from revise.models import ReviseError
 from revise.scheduler import KNOWN_RETRIEVABILITY, load_state, make_scheduler
 
 DECK_ROLE = Qt.ItemDataRole.UserRole
+SHARE_FILTER = "Cours pour revise (*.revise)"
+ANKI_FILTER = "Cartes pour Anki (*.txt)"
 
 
 class CoursesPage(QWidget):
@@ -84,10 +91,15 @@ class CoursesPage(QWidget):
         self.selection_label.setWordWrap(False)
         self.edit_btn = QPushButton("Voir et corriger les cartes")
         self.edit_btn.clicked.connect(self._edit)
+        self.share_btn = QPushButton("Partager…")
+        self.share_btn.setToolTip("Enregistre les cours cochés dans un fichier à envoyer à quelqu'un : il n'a plus "
+                                  "qu'à le glisser dans « Ajouter un cours ». Ta progression n'est pas incluse.")
+        self.share_btn.clicked.connect(self._share)
         self.delete_btn = QPushButton("Supprimer")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.clicked.connect(self._delete)
-        lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn, self.delete_btn))
+        lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn, self.share_btn,
+                          self.delete_btn))
 
         self.review_btn = ActionCard("Réviser", "Les cartes du jour : celles à revoir et quelques nouvelles.", True)
         self.review_btn.clicked.connect(lambda: self._start(False))
@@ -155,7 +167,7 @@ class CoursesPage(QWidget):
         self.tree.blockSignals(False)
         has = self.tree.topLevelItemCount() > 0
         for w in (self.tree, self.all_btn, self.none_btn, self.selection_label, *self.actions, self.new_per_day,
-                  self.include_known, self.edit_btn, self.delete_btn, self.settings_label):
+                  self.include_known, self.edit_btn, self.share_btn, self.delete_btn, self.settings_label):
             w.setVisible(has)
         self.empty.setVisible(not has)
         self.empty_space.setVisible(not has)
@@ -203,6 +215,7 @@ class CoursesPage(QWidget):
             b.setEnabled(bool(sel))
         self.edit_btn.setEnabled(len(sel) == 1)
         self.edit_btn.setToolTip("" if len(sel) == 1 else "Coche un seul cours pour voir ses cartes.")
+        self.share_btn.setEnabled(bool(sel))
         self.delete_btn.setEnabled(bool(sel))
 
     def _start(self, exam: bool) -> None:
@@ -214,6 +227,33 @@ class CoursesPage(QWidget):
         sel = self.selected_decks()
         if len(sel) == 1:
             self.edit_cards.emit(sel[0])
+
+    def _share(self) -> None:
+        sel = self.selected_decks()
+        if not sel:
+            return
+        first = self.db.deck(sel[0])
+        if first is None:
+            return
+        name = deck_label(first) if len(sel) == 1 else f"{first.subject} ({len(sel)} cours)"
+        name = re.sub(r'[\\/:*?"<>|]+', " ", name).strip() or "cours"
+        path, chosen = QFileDialog.getSaveFileName(self, "Partager des cours", str(Path.home() / name),
+                                                   f"{SHARE_FILTER};;{ANKI_FILTER}")
+        if path:
+            self.share_to(Path(path), anki=chosen == ANKI_FILTER)
+
+    def share_to(self, dest: Path, anki: bool = False) -> bool:
+        """Écrit les cours cochés dans `dest` (fichier .revise, ou texte pour Anki)."""
+        wanted = ".txt" if anki else share.EXTENSION
+        if dest.suffix.lower() != wanted:
+            dest = dest.with_name(dest.name + wanted)
+        try:
+            n = (share.export_anki if anki else share.export_courses)(self.db, self.selected_decks(), dest)
+        except ReviseError as e:
+            QMessageBox.warning(self, "Partager", str(e))
+            return False
+        self.selection_label.setText(f"{n} cartes enregistrées dans {dest.name}")
+        return True
 
     def _delete(self) -> None:
         sel = self.selected_decks()

@@ -29,6 +29,13 @@ QPushButton#nav {{ text-align: left; padding: 11px 16px; border: none; border-ra
 QPushButton#nav:hover {{ background: {PANEL_2}; color: {TEXT}; }}
 QPushButton#nav:checked {{ background: {ACCENT_DIM}; color: white; font-weight: 700; }}
 QPushButton#nav:disabled {{ color: #5d6276; background: transparent; }}
+QPushButton#side {{ text-align: left; padding: 7px 16px; border: none; border-radius: 9px; margin: 2px 10px;
+                    background: transparent; color: {MUTED}; font-size: 10pt; }}
+QPushButton#side:hover {{ background: {PANEL_2}; color: {TEXT}; }}
+QPushButton#update {{ text-align: left; padding: 9px 12px; border: 1px solid {ACCENT}; border-radius: 9px;
+                      margin: 2px 10px 8px 10px; background: {ACCENT_DIM}; color: white; font-size: 10pt;
+                      font-weight: 700; }}
+QPushButton#update:hover {{ background: {ACCENT}; color: #0d1020; }}
 QLabel#title {{ font-size: 22pt; font-weight: 800; }}
 QLabel#subtitle, QLabel#muted {{ color: {MUTED}; }}
 QLabel#section {{ font-size: 12.5pt; font-weight: 700; }}

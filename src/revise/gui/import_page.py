@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFil
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
                                QWidget)
 
-from revise import config
+from revise import config, share
 from revise.db import Database, file_sha256
 from revise.engines import online
 from revise.engines.claude_code import claude_binary
@@ -119,14 +119,23 @@ class ImportWorker(QObject):
 
     def run(self) -> None:
         db = Database(self.db_path)
-        engine = self.engine = make_engine(self.engine_name)
         imported = 0
         try:
             for pdf in self.pdfs:
                 if self.cancelled:
                     break
                 try:
-                    res = import_pdf(db, engine, pdf, self.subject, lambda m, n=pdf.name: self.status.emit(f"{n} : {m}"))
+                    if share.is_share_file(pdf):  # cours partagé : les cartes sont déjà écrites, pas besoin d'IA
+                        got = share.import_file(db, pdf, self.subject)
+                        new = [r for r in got if not r.skipped]
+                        imported += len(new)
+                        self.file_done.emit(pdf.name, f"{len(new)} cours, {sum(r.cards for r in new)} cartes" if new
+                                            else "déjà ajouté", True)
+                        continue
+                    if self.engine is None:
+                        self.engine = make_engine(self.engine_name)
+                    res = import_pdf(db, self.engine, pdf, self.subject,
+                                     lambda m, n=pdf.name: self.status.emit(f"{n} : {m}"))
                     if res.skipped:
                         self.file_done.emit(pdf.name, "déjà ajouté", True)
                     else:
@@ -163,7 +172,7 @@ class ImportPage(QWidget):
         lay.setContentsMargins(28, 24, 28, 24)
         lay.addWidget(page_header("Ajouter un cours",
                                   "Donne le PDF d'un cours : l'application en tire des cartes de révision, "
-                                  "une fiche et des QCM."))
+                                  "une fiche et des QCM. Tu peux aussi donner un cours partagé (fichier .revise)."))
 
         self.drop = QFrame()
         self.drop.setObjectName("drop")
@@ -286,10 +295,12 @@ class ImportPage(QWidget):
 
     def add_file(self, path: Path, checked: bool = False) -> None:
         path = path.resolve()
-        if str(path) in self._known_paths() or path.suffix.lower() != ".pdf" or not path.is_file():
+        shared = share.is_share_file(path)
+        if str(path) in self._known_paths() or not (shared or path.suffix.lower() == ".pdf") or not path.is_file():
             return
-        done = self.db.find_deck_by_hash(file_sha256(path)) is not None
-        label = path.name + ("   ✓ déjà ajouté" if done else f"   —   {guess_subject(path)}")
+        done = not shared and self.db.find_deck_by_hash(file_sha256(path)) is not None
+        label = path.name + ("   ✓ déjà ajouté" if done else
+                             "   —   cours partagé" if shared else f"   —   {guess_subject(path)}")
         item = QListWidgetItem(label)
         item.setData(PATH_ROLE, str(path))
         item.setToolTip(str(path))
@@ -338,7 +349,8 @@ class ImportPage(QWidget):
 
     def browse(self) -> None:
         start = str(Path.home() / "Downloads") if (Path.home() / "Downloads").is_dir() else str(Path.home())
-        paths, _ = QFileDialog.getOpenFileNames(self, "Choisir des PDF de cours", start, "PDF (*.pdf)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choisir des cours", start,
+                                                "Cours (*.pdf *.revise);;PDF (*.pdf);;Cours partagés (*.revise)")
         for p in paths:
             self.add_file(Path(p), checked=True)
         self._update_count()
@@ -407,7 +419,8 @@ class ImportPage(QWidget):
         subject = self.subject.currentText().strip()
         subject = None if (not subject or subject == AUTO_SUBJECT) else subject
         engine = self.engine_name()
-        if engine == "en-ligne" and not online.settings()["key"] and not self.edit_key():
+        needs_ai = any(not share.is_share_file(p) for p in pdfs)
+        if needs_ai and engine == "en-ligne" and not online.settings()["key"] and not self.edit_key():
             return
         config.save({"engine": engine})
         self.progress.setRange(0, len(pdfs))

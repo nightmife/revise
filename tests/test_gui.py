@@ -190,3 +190,63 @@ def test_prepare_traps_from_quiz_page(qapp, db, monkeypatch):
     q = quiz.questions[0]
     assert sorted(c for i, c in enumerate(q.choices) if i != q.correct) == sorted(q.card.distractors)
     win.close()
+
+
+def test_update_notice(qapp, db):
+    import io
+    import time
+    win = MainWindow(db)
+    win.show()
+    assert not win.update_btn.isVisible()
+    win.check_updates(opener=lambda req, timeout: io.BytesIO(b'{"tag_name": "v99.1.0"}'))
+    for _ in range(200):                              # la réponse arrive d'un autre fil
+        qapp.processEvents()
+        if win.update_btn.isVisible():
+            break
+        time.sleep(0.01)
+    assert win.update_btn.isVisible() and "99.1.0" in win.update_btn.text()
+    win.close()
+
+
+def test_share_from_courses_and_receive_in_import_page(qapp, db, tmp_path):
+    from revise.db import Database
+    from revise.gui.import_page import ImportWorker
+    deck = db.add_deck("LIFAPSD", "Les piles", "/dl/[LIFAPSD] CM8 - Pile et file.pdf", None, "abonnement",
+                       [CardDraft("qa", "Qu'est-ce qu'une pile ?", "Structure LIFO.", 3, "", ["a", "b", "c"])])
+    win = MainWindow(db)
+    win.show()
+    qapp.processEvents()
+    page = win.courses
+    assert page.selected_decks() == [deck] and page.share_btn.isEnabled()   # un seul cours : coché d'office
+    assert page.share_to(tmp_path / "piles")                               # l'extension est ajoutée
+    shared = tmp_path / "piles.revise"
+    assert shared.is_file()
+    assert page.share_to(tmp_path / "piles.txt", anki=True) and (tmp_path / "piles.txt").is_file()
+
+    other = Database(tmp_path / "autre.db")
+    win2 = MainWindow(other)
+    imp = win2.import_page
+    imp.add_file(shared, checked=True)
+    assert imp.selected_paths() == [shared.resolve()]
+    done = []
+    worker = ImportWorker(other.path, imp.selected_paths(), None, "en-ligne")   # aucun moteur n'est lancé
+    worker.file_done.connect(lambda name, msg, ok: done.append((msg, ok)))
+    worker.run()
+    assert done == [("1 cours, 1 cartes", True)] and worker.engine is None
+    assert [c.distractors for c in other.cards()] == [["a", "b", "c"]]
+    win.close()
+    win2.close()
+    other.close()
+
+
+def test_backup_dialog(qapp, db, tmp_path):
+    from revise.gui.backup_dialog import BackupDialog
+    deck = db.add_deck("Algo", "Piles", None, None, "simple", [CardDraft("qa", "Q", "R")])
+    win = MainWindow(db)
+    dialog = BackupDialog(db, parent=win)
+    assert dialog.save_to(tmp_path / "ma-sauvegarde") and (tmp_path / "ma-sauvegarde.db").is_file()
+    db.delete_deck(deck)
+    assert dialog.restore_from(tmp_path / "ma-sauvegarde.db") and dialog.restored
+    assert [d.title for d in db.decks()] == ["Piles"]
+    assert not BackupDialog(db, busy=True, parent=win).restore_btn.isEnabled()
+    win.close()

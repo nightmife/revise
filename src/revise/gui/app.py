@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import sys
+import threading
 
-from PySide6.QtCore import QLibraryInfo, QTranslator
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QLibraryInfo, QTranslator, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from revise import __version__
+from revise import __version__, updates
 from revise.db import Database
 from revise.gui import theme
+from revise.gui.backup_dialog import BackupDialog
 from revise.gui.cards_dialog import CardsDialog
 from revise.gui.common import confirm
 from revise.gui.courses import CoursesPage
@@ -24,6 +26,7 @@ from revise.gui.stats_page import StatsPage
 
 class MainWindow(QMainWindow):
     COURSES, LEARN, QUIZ, IMPORT, STATS = range(5)  # index des pages = identifiants des boutons
+    update_found = Signal(str)  # émis depuis le fil qui interroge Internet
 
     def __init__(self, db: Database):
         super().__init__()
@@ -69,6 +72,18 @@ class MainWindow(QMainWindow):
             self.nav.addButton(b, i)
             sl.addWidget(b)
         sl.addStretch(1)
+        self.update_btn = QPushButton()
+        self.update_btn.setObjectName("update")
+        self.update_btn.setToolTip("Ouvre la page de téléchargement dans le navigateur.")
+        self.update_btn.setVisible(False)
+        self.update_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_PAGE)))
+        self.update_found.connect(self.show_update)
+        sl.addWidget(self.update_btn)
+        self.backup_btn = QPushButton("Sauvegarde…")
+        self.backup_btn.setObjectName("side")
+        self.backup_btn.setToolTip("Mettre tes cours et ta progression à l'abri dans un fichier, ou les récupérer.")
+        self.backup_btn.clicked.connect(self.open_backup)
+        sl.addWidget(self.backup_btn)
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("tagline")
         sl.addWidget(ver)
@@ -120,6 +135,34 @@ class MainWindow(QMainWindow):
         CardsDialog(self.db, deck_id, self).exec()
         self.courses.refresh()
 
+    # ------------------------------------------------------------ mise à jour
+    def check_updates(self, opener=None) -> None:
+        """Demande en arrière-plan s'il existe une version plus récente ; sans réponse, il ne se passe rien."""
+        def work() -> None:
+            version = updates.available_update(opener) if opener else updates.available_update()
+            if version:
+                try:
+                    self.update_found.emit(version)
+                except RuntimeError:  # fenêtre déjà fermée
+                    pass
+        threading.Thread(target=work, name="revise-maj", daemon=True).start()
+
+    def show_update(self, version: str) -> None:
+        self.update_btn.setText(f"Nouvelle version {version}\nLa télécharger")
+        self.update_btn.setVisible(True)
+
+    # ------------------------------------------------------------- sauvegarde
+    def busy(self) -> bool:
+        """L'IA écrit dans la base (import ou réponses pièges en cours)."""
+        return self.import_page.worker is not None or self.quiz.worker is not None
+
+    def open_backup(self) -> None:
+        dialog = BackupDialog(self.db, self.busy(), self)
+        dialog.exec()
+        if dialog.restored:
+            self.import_page.scan(search=self.import_page._scanned)
+            self.show_page(self.COURSES)
+
     def closeEvent(self, e) -> None:
         workers = [w for w in (self.import_page.worker, self.quiz.worker) if w is not None]
         if workers:
@@ -149,6 +192,7 @@ def main(db: Database | None = None) -> int:
         app.installTranslator(translator)
     win = MainWindow(db or Database())
     win.show()
+    win.check_updates()
     return app.exec()
 
 

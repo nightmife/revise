@@ -34,12 +34,24 @@ def pick_engine(name: str):
 # --------------------------------------------------------------- commandes ---
 
 def cmd_import(db: Database, args) -> int:
+    from revise import share
     from revise.importer import guess_subject, import_pdf
 
-    engine = pick_engine(args.moteur)
+    engine = None
     total = 0
     for raw in args.pdf:
         pdf = Path(raw).expanduser()
+        if share.is_share_file(pdf):  # cours partagé : cartes déjà écrites, aucun moteur à lancer
+            for r in share.import_file(db, pdf, args.matiere):
+                if r.skipped:
+                    console.print(f"[yellow]{r.name} déjà importé[/] (paquet {r.deck_id}).")
+                else:
+                    total += r.cards
+                    console.print(f"[green]✓[/] {pdf.name} → paquet {r.deck_id} « {r.name} » : "
+                                  f"[bold]{r.cards} cartes[/]")
+            continue
+        if engine is None:
+            engine = pick_engine(args.moteur)
         subject = args.matiere or guess_subject(pdf)
         try:
             with console.status(f"{pdf.name}…") as status:
@@ -57,9 +69,37 @@ def cmd_import(db: Database, args) -> int:
         for c in res.cards[:3]:
             console.print(Panel(Markdown(f"{c.question}\n\n---\n\n{c.answer}"), title=f"exemple · p. {c.page or '?'}",
                                 title_align="left", border_style="grey50", expand=False, width=90))
-    getattr(engine, "close", lambda: None)()
+    getattr(engine, "close", lambda: None)()  # sans effet si aucun moteur n'a été lancé
     if total:
         console.print("\nC'est parti : [bold]revise reviser[/]  (ou [bold]revise editer N[/] pour retoucher les cartes)")
+    return 0
+
+
+def cmd_share(db: Database, args) -> int:
+    from revise import share
+
+    deck_ids = resolve_decks(db, args.cours, None) or [d.id for d in db.decks()]
+    dest = Path(args.fichier).expanduser()
+    n = (share.export_anki if args.anki else share.export_courses)(db, deck_ids, dest)
+    console.print(f"[green]✓[/] {n} cartes de {len(deck_ids)} cours enregistrées dans {dest}")
+    return 0
+
+
+def cmd_backup(db: Database, args) -> int:
+    dest = Path(args.fichier).expanduser()
+    db.backup_to(dest)
+    console.print(f"[green]✓[/] Sauvegarde enregistrée : {dest}")
+    return 0
+
+
+def cmd_restore(db: Database, args) -> int:
+    src = Path(args.fichier).expanduser()
+    if not args.oui and not Confirm.ask("Remplacer tous les cours et la progression actuels par cette sauvegarde ?",
+                                        default=False):
+        return 1
+    previous = db.restore_from(src)
+    console.print(f"[green]✓[/] Sauvegarde restaurée ({len(db.decks())} cours)."
+                  + (f" Anciennes données gardées dans {previous}" if previous else ""))
     return 0
 
 
@@ -264,7 +304,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(cours=None, examen=False)
     sub = p.add_subparsers(dest="cmd")
 
-    s = sub.add_parser("importer", aliases=["import"], help="créer des cartes à partir de PDF")
+    s = sub.add_parser("importer", aliases=["import"],
+                       help="créer des cartes à partir de PDF, ou ajouter un cours partagé (.revise)")
     s.add_argument("pdf", nargs="+")
     s.add_argument("-m", "--matiere", help="matière (défaut : nom du dossier du PDF)")
     s.add_argument("--moteur", choices=["auto", "ia", "en-ligne", "abonnement", "simple"], default="auto",
@@ -274,6 +315,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")
     s.set_defaults(func=cmd_import)
+
+    s = sub.add_parser("partager", help="enregistrer des cours dans un fichier .revise à envoyer à quelqu'un")
+    s.add_argument("fichier", help="fichier à écrire, ex. algo.revise")
+    s.add_argument("-c", "--cours", nargs="+", metavar="COURS", help="seulement ces cours (défaut : tous)")
+    s.add_argument("--anki", action="store_true", help="écrire un fichier texte à importer dans Anki")
+    s.set_defaults(func=cmd_share)
+
+    s = sub.add_parser("sauvegarder", help="copier toutes les données (cours, cartes, progression) dans un fichier")
+    s.add_argument("fichier")
+    s.set_defaults(func=cmd_backup)
+
+    s = sub.add_parser("restaurer", help="remplacer toutes les données par celles d'une sauvegarde")
+    s.add_argument("fichier")
+    s.add_argument("--oui", action="store_true")
+    s.set_defaults(func=cmd_restore)
 
     s = sub.add_parser("cle", help="enregistrer la clé API de l'IA en ligne")
     s.add_argument("--fournisseur", choices=["groq", "gemini", "autre"])
