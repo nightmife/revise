@@ -38,7 +38,7 @@ def test_exam_order_is_random(db):
     orders = {tuple(c.id for c in Session(db, cram=True).queue) for _ in range(6)}
     assert len(orders) > 1
     assert all(sorted(o) == sorted(c.id for c in db.cards()) for o in orders)
-    assert [c.question for c in Session(db, new_per_day=5).queue] == [f"Q{i}" for i in range(5)]  # mode normal inchangé
+    assert len(Session(db, new_per_day=5).queue) == 5                # mode normal : la limite du jour tient
 
 
 def test_ai_distractors_come_first(db):
@@ -91,3 +91,17 @@ def test_old_database_gets_the_new_column(tmp_path):
     assert old.card(card.id).distractors == ["faux"]
     old.close()
     Database(path).close()   # rouvrir ne casse rien
+
+
+def test_quiz_draws_from_every_selected_course(db):
+    ids = [db.add_deck("Algo", f"CM{n}", None, None, "ia",
+                       [CardDraft("qa", f"Question {n}-{i} ?", f"Réponse {n}-{i}", i + 1, "", ["a", "b", "c"])
+                        for i in range(20)]) for n in range(3)]
+    cards = db.cards(deck_ids=ids[:2])
+    seen_decks, firsts = set(), set()
+    for seed in range(6):
+        quiz = build_quiz(cards, 10, random.Random(seed))
+        assert len({q.card.id for q in quiz}) == 10
+        seen_decks |= {q.card.deck_id for q in quiz}
+        firsts.add(quiz[0].card.id)
+    assert seen_decks == set(ids[:2]) and len(firsts) > 1          # les deux cours choisis, jamais le troisième

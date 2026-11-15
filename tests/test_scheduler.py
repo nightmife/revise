@@ -12,11 +12,48 @@ def setup(db, n=5, subject="Algo"):
                        [CardDraft("qa", f"Q{i}", f"R{i}", i + 1) for i in range(n)])
 
 
-def test_new_cards_in_course_order_and_limit(db):
-    setup(db, 5)
+def test_new_cards_are_limited_and_random_across_courses(db):
+    import random
+    first = setup(db, 30)
+    second = db.add_deck("Algo", "CM2", None, None, "simple", [CardDraft("qa", f"Autre{i}", "R", i + 1) for i in range(30)])
     s = Session(db, new_per_day=3)
     assert s.remaining == 3
-    assert s.current().question == "Q0"
+    assert s.current().id == s.current().id                       # stable tant qu'on n'a pas répondu
+    # Sur plusieurs séances : pas toujours les mêmes cartes, pas toujours le même ordre, et les deux cours servent
+    drawn = [[c.id for c in Session(db, new_per_day=10, rng=random.Random(seed)).queue] for seed in range(8)]
+    assert len({tuple(sorted(d)) for d in drawn}) > 1
+    decks = {db.card(i).deck_id for d in drawn for i in d}
+    assert decks == {first, second}
+    firsts = {Session(db, new_per_day=10, rng=random.Random(seed)).current().id for seed in range(8)}
+    assert len(firsts) > 1
+    # Une séance déroulée en entier pose chaque carte une seule fois, dans un ordre qui n'est pas celui du cours
+    s = Session(db, new_per_day=20, deck_ids=[first], rng=random.Random(3))
+    asked = []
+    while (c := s.current()) is not None and len(asked) < 50:
+        asked.append(c.question)
+        s.answer(c, Rating.Easy)
+    assert len(asked) == 20 and len(set(asked)) == 20 and asked != sorted(asked, key=lambda q: int(q[1:]))
+
+
+def test_due_cards_are_asked_in_random_order(db):
+    import random
+    setup(db, 12)
+    past = "2000-01-01T00:00:00.000000+00:00"
+    s = Session(db, new_per_day=12)
+    while (c := s.current()) is not None:
+        s.answer(c, Rating.Easy)
+    orders = set()
+    for seed in range(6):
+        db.conn.execute("UPDATE cards SET due = ?", (past,))
+        db.conn.commit()
+        s = Session(db, new_per_day=0, rng=random.Random(seed))
+        order = []
+        while (c := s.current()) is not None:
+            order.append(c.id)
+            s.answer(c, Rating.Easy)
+        assert sorted(order) == sorted(c.id for c in db.cards())
+        orders.add(tuple(order))
+    assert len(orders) > 1
 
 
 def test_again_keeps_card_in_session_good_eventually_leaves(db):

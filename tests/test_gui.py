@@ -342,20 +342,22 @@ def test_explain_button(qapp, db):
     assert not rv.explain_btn.isVisible()                 # pas avant d'avoir vu la réponse
     rv.explain()
     assert ai.asked == [] and not rv.explanation.isVisible()
+    for _ in range(2):                                    # les deux cartes, dans l'ordre tiré au hasard
+        about_stack = "pile" in rv.card.question
+        rv.reveal_btn.click()
+        assert rv.explain_btn.isVisible()
+        rv.explain_btn.click()
+        assert wait(lambda: not rv.ai_busy)
+        text = rv.explanation.toPlainText()
+        if about_stack:
+            assert "pile d'assiettes" in text and "O(1)" in text and "$" not in text
+            assert "Qu'est-ce qu'une pile ?" in ai.asked[-1] and "Structure LIFO." in ai.asked[-1] and "Algo" in ai.asked[-1]
+            rv.rate_btns[1].click()                       # « À revoir » : la carte reviendra, on passe à la suivante
+            assert not rv.explanation.isVisible() and not rv.explain_btn.isVisible()
+        else:
+            assert "quota épuisé" in text and rv.explain_btn.isEnabled()   # erreur dite, pas de plantage
+            rv.rate_btns[1].click()
     rv.reveal_btn.click()
-    assert rv.explain_btn.isVisible()
-    rv.explain_btn.click()
-    assert wait(lambda: not rv.ai_busy)
-    text = rv.explanation.toPlainText()
-    assert "pile d'assiettes" in text and "O(1)" in text and "$" not in text
-    assert "Qu'est-ce qu'une pile ?" in ai.asked[0] and "Structure LIFO." in ai.asked[0] and "Algo" in ai.asked[0]
-
-    rv.rate_btns[3].click()                               # carte suivante : l'explication disparaît
-    assert not rv.explanation.isVisible() and not rv.explain_btn.isVisible()
-    rv.reveal_btn.click()
-    rv.explain_btn.click()
-    assert wait(lambda: not rv.ai_busy)
-    assert "quota épuisé" in rv.explanation.toPlainText() and rv.explain_btn.isEnabled()   # erreur dite, pas de plantage
 
     rv.explain_btn.click()                                # réponse qui arrive après qu'on a changé de carte
     rv.rate_btns[3].click()

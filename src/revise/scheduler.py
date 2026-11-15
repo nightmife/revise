@@ -83,8 +83,9 @@ def start_of_day(now: datetime) -> datetime:
 class Session:
     """File d'une séance.
 
-    Mode normal : cartes dues d'abord, puis nouvelles cartes (dans la limite du jour) ;
-    les cartes ratées ou en apprentissage reviennent tant qu'elles sont dues dans la séance.
+    Mode normal : les cartes à revoir d'abord, puis les nouvelles cartes du jour ; les unes comme les
+    autres dans un ordre aléatoire, tirées parmi tous les cours choisis. Les cartes ratées ou en
+    apprentissage reviennent tant qu'elles sont dues dans la séance.
 
     Mode examen (`cram`) : toutes les cartes des cours choisis, dans un ordre aléatoire, sans
     limite ni échéance ; une carte notée « À revoir » ou « Difficile » repasse en fin de file,
@@ -103,6 +104,8 @@ class Session:
     done: int = 0
     new_seen: int = 0
     to_retry: set[int] = field(default_factory=set)
+    rng: random.Random = field(default_factory=random.Random)
+    order: dict[int, float] = field(default_factory=dict)  # rang tiré au hasard de chaque carte de la séance
 
     def __post_init__(self) -> None:
         now = utcnow()
@@ -120,14 +123,20 @@ class Session:
                     else:
                         kept.append(c)
                 cards = kept
-            random.shuffle(cards)
+            self.rng.shuffle(cards)
             self.queue = cards
             return
         due = self.db.due_cards(now + LEARN_AHEAD, self.subject, self.deck_ids)
         already = self.db.new_introduced_since(start_of_day(now), self.subject, self.deck_ids)
         quota = max(0, self.new_per_day - already)
-        new = self.db.new_cards(quota, self.subject, self.deck_ids)
+        # Les nouvelles cartes du jour sont tirées au hasard dans tous les cours choisis (pas seulement le premier).
+        available = self.db.new_cards(1_000_000, self.subject, self.deck_ids)
+        new = self.rng.sample(available, min(quota, len(available)))
         self.queue = due + new
+        self.order = {c.id: self.rng.random() for c in self.queue}
+
+    def _rank(self, card: Card) -> float:
+        return self.order.setdefault(card.id, self.rng.random())
 
     @property
     def remaining(self) -> int:
@@ -157,16 +166,17 @@ class Session:
         if self.cram:
             return self.queue[0] if self.queue else None
         now = now or utcnow()
-        # Priorité aux cartes dues ; les nouvelles (échéance = date de création) passent après.
         ready = [c for c in self.queue if parse_iso(c.due) <= now + LEARN_AHEAD]
         if not ready:
             return None
+        # D'abord les cartes à revoir (celles qu'on risque d'oublier), puis les nouvelles ; dans chaque groupe,
+        # un ordre tiré au hasard, qui reste le même tant que la séance dure.
         seen = [c for c in ready if c.fsrs is not None and parse_iso(c.due) <= now]
         if seen:
-            return min(seen, key=lambda c: c.due)
+            return min(seen, key=self._rank)
         new = [c for c in ready if c.fsrs is None]
         if new:
-            return new[0]
+            return min(new, key=self._rank)
         return min(ready, key=lambda c: c.due)  # apprentissage en avance (< 20 min)
 
     def answer(self, card: Card, rating: Rating, duration_ms: int | None = None,
@@ -186,6 +196,7 @@ class Session:
                 self.to_retry.discard(card.id)
         elif parse_iso(updated.due) <= now + LEARN_AHEAD:
             self.queue.append(updated)
+            self.order[updated.id] = self.rng.random()  # elle ne revient pas forcément à la même place
         return updated
 
     def skip(self, card: Card) -> None:
