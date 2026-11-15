@@ -33,6 +33,19 @@ jobs:
         run: |
           $p = Start-Process dist/revise.exe -ArgumentList '--selftest' -Wait -PassThru
           exit $p.ExitCode
+      - name: Essai de la mise à jour automatique (l'exécutable se remplace lui-même)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory essai | Out-Null
+          Copy-Item dist/revise.exe essai/revise.exe
+          Copy-Item dist/revise.exe essai/telechargee.exe
+          $p = Start-Process essai/revise.exe -ArgumentList '--install-from', "$PWD\essai\telechargee.exe" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "installation : code $($p.ExitCode)"; exit 1 }
+          if (-not (Test-Path essai/revise-ancien.exe)) { Write-Error "ancienne version non gardée"; exit 1 }
+          $p = Start-Process essai/revise.exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "la version installée ne démarre pas"; exit 1 }
+          $p = Start-Process essai/revise.exe -ArgumentList '--cleanup-update' -Wait -PassThru
+          if (Test-Path essai/revise-ancien.exe) { Write-Error "ancienne version non supprimée"; exit 1 }
       - uses: actions/upload-artifact@v4
         with:
           name: revise-windows
@@ -79,6 +92,15 @@ jobs:
             sleep 5
           done
           test -f "revise-mac-${{ matrix.arch }}.dmg"
+      - name: Essai de la mise à jour automatique (l'application se remplace elle-même à partir du .dmg)
+        run: |
+          mkdir essai
+          ditto dist/revise.app essai/revise.app
+          essai/revise.app/Contents/MacOS/revise --install-from "$PWD/revise-mac-${{ matrix.arch }}.dmg"
+          test -d essai/revise.app.ancien
+          essai/revise.app/Contents/MacOS/revise --selftest
+          essai/revise.app/Contents/MacOS/revise --cleanup-update
+          test ! -e essai/revise.app.ancien
       - uses: actions/upload-artifact@v4
         with:
           name: revise-mac-${{ matrix.arch }}

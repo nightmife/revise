@@ -205,7 +205,44 @@ def test_update_notice(qapp, db):
             break
         time.sleep(0.01)
     assert win.update_btn.isVisible() and "99.1.0" in win.update_btn.text()
+    assert "télécharger" in win.update_btn.text()     # pas d'exécutable à remplacer ici : renvoi vers la page
     win.close()
+
+
+def test_update_dialog(qapp, db):
+    import time
+    from pathlib import Path
+
+    from revise import updates
+    from revise.gui.update_dialog import UpdateDialog
+    from revise.models import ReviseError
+
+    def wait(cond):
+        for _ in range(300):
+            qapp.processEvents()
+            if cond():
+                return True
+            time.sleep(0.01)
+        return False
+
+    release = updates.Release("99.0.0")
+
+    def broken(rel, progress, cancelled):
+        progress(5 << 20, 50 << 20)
+        raise ReviseError("pas d'Internet")
+    dialog = UpdateDialog(release, installer=broken)
+    dialog.show()
+    dialog.start()
+    assert wait(lambda: dialog.install_btn.text() == "Réessayer")
+    assert "pas d'Internet" in dialog.text.text() and dialog.installed is None and dialog.install_btn.isEnabled()
+
+    def works(rel, progress, cancelled):
+        progress(50 << 20, 50 << 20)
+        return "windows", Path("C:/revise.exe")
+    dialog.installer = works
+    dialog.start()
+    assert wait(lambda: dialog.installed is not None)
+    assert dialog.installed == ("windows", str(Path("C:/revise.exe"))) and not dialog.isVisible()
 
 
 def test_share_from_courses_and_receive_in_import_page(qapp, db, tmp_path):

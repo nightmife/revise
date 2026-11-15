@@ -36,7 +36,17 @@ def test_is_newer():
 
 def test_update_found_and_request_is_anonymous():
     seen = []
-    assert updates.available_update(fake({"tag_name": "v99.0.1"}, seen)) == "99.0.1"
+    release = updates.available_update(fake({"tag_name": "v99.0.1", "assets": [
+        {"name": "revise.exe", "size": 10, "digest": "sha256:" + "a" * 64,
+         "browser_download_url": updates.ASSET_PREFIX + "v99.0.1/revise.exe"},
+        {"name": "sans-empreinte.dmg", "size": 5, "browser_download_url": updates.ASSET_PREFIX + "v99.0.1/x.dmg"},
+        {"name": "ailleurs.exe", "size": 10, "browser_download_url": "https://exemple.org/revise.exe"},
+        {"name": "vide.exe", "size": 0, "browser_download_url": updates.ASSET_PREFIX + "v99.0.1/vide.exe"},
+        "n'importe quoi"]}, seen))
+    assert release.version == "99.0.1"
+    assert sorted(release.assets) == ["revise.exe", "sans-empreinte.dmg"]     # jamais un fichier venu d'ailleurs
+    assert release.assets["revise.exe"] == updates.Asset(updates.ASSET_PREFIX + "v99.0.1/revise.exe", 10, "a" * 64)
+    assert release.assets["sans-empreinte.dmg"].sha256 is None
     [req] = seen
     assert req.full_url == updates.LATEST_API and req.get_header("User-agent") == "revise"
     assert req.data is None

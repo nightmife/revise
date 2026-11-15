@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import sys
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QLibraryInfo, QTranslator, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                               QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+                               QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
-from revise import __version__, updates
+from revise import __version__, selfupdate, updates
 from revise.db import Database
 from revise.gui import theme
 from revise.gui.backup_dialog import BackupDialog
@@ -22,11 +23,12 @@ from revise.gui.learn_page import LearnPage
 from revise.gui.quiz_page import QuizPage
 from revise.gui.review import ReviewPage
 from revise.gui.stats_page import StatsPage
+from revise.gui.update_dialog import UpdateDialog
 
 
 class MainWindow(QMainWindow):
     COURSES, LEARN, QUIZ, IMPORT, STATS = range(5)  # index des pages = identifiants des boutons
-    update_found = Signal(str)  # émis depuis le fil qui interroge Internet
+    update_found = Signal(object)  # updates.Release, émis depuis le fil qui interroge Internet
 
     def __init__(self, db: Database):
         super().__init__()
@@ -74,9 +76,9 @@ class MainWindow(QMainWindow):
         sl.addStretch(1)
         self.update_btn = QPushButton()
         self.update_btn.setObjectName("update")
-        self.update_btn.setToolTip("Ouvre la page de téléchargement dans le navigateur.")
         self.update_btn.setVisible(False)
-        self.update_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_PAGE)))
+        self.update_btn.clicked.connect(self.install_update)
+        self.release: updates.Release | None = None
         self.update_found.connect(self.show_update)
         sl.addWidget(self.update_btn)
         self.backup_btn = QPushButton("Sauvegarde…")
@@ -139,17 +141,43 @@ class MainWindow(QMainWindow):
     def check_updates(self, opener=None) -> None:
         """Demande en arrière-plan s'il existe une version plus récente ; sans réponse, il ne se passe rien."""
         def work() -> None:
-            version = updates.available_update(opener) if opener else updates.available_update()
-            if version:
+            release = updates.available_update(opener) if opener else updates.available_update()
+            if release:
                 try:
-                    self.update_found.emit(version)
+                    self.update_found.emit(release)
                 except RuntimeError:  # fenêtre déjà fermée
                     pass
+            selfupdate.cleanup_leftovers()  # l'ancienne version, gardée le temps de la dernière mise à jour
         threading.Thread(target=work, name="revise-maj", daemon=True).start()
 
-    def show_update(self, version: str) -> None:
-        self.update_btn.setText(f"Nouvelle version {version}\nLa télécharger")
+    def show_update(self, release: updates.Release) -> None:
+        self.release = release
+        auto = selfupdate.can_install()
+        self.update_btn.setText(f"Nouvelle version {release.version}\n{'L’installer' if auto else 'La télécharger'}")
+        self.update_btn.setToolTip("Télécharge et installe la nouvelle version, puis relance l'application." if auto
+                                   else "Ouvre la page de téléchargement dans le navigateur.")
         self.update_btn.setVisible(True)
+
+    def install_update(self) -> None:
+        if self.release is None:
+            return
+        if not selfupdate.can_install():  # lancée depuis le code source (Linux) : pas d'exécutable à remplacer
+            QDesktopServices.openUrl(QUrl(updates.DOWNLOAD_PAGE))
+            return
+        if self.busy():
+            QMessageBox.information(self, "Mise à jour", "L'IA travaille encore : attends qu'elle ait fini, "
+                                                         "puis relance la mise à jour.")
+            return
+        dialog = UpdateDialog(self.release, self)
+        dialog.exec()
+        if dialog.installed:
+            kind, target = dialog.installed
+            try:
+                selfupdate.relaunch(kind, Path(target))
+            except OSError:
+                QMessageBox.information(self, "Mise à jour", "La nouvelle version est installée : rouvre revise.")
+            self.db.close()
+            QApplication.quit()
 
     # ------------------------------------------------------------- sauvegarde
     def busy(self) -> bool:

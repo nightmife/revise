@@ -37,9 +37,31 @@ def selftest() -> int:
     return 0
 
 
+def install_from(file: str) -> int:
+    """Installe une mise à jour déjà téléchargée (sert à essayer le mécanisme pendant la construction)."""
+    from pathlib import Path
+
+    from revise import selfupdate
+    from revise.models import ReviseError
+
+    try:
+        selfupdate.install_local(Path(file))
+    except ReviseError as e:
+        print(e, file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    if "--install-from" in sys.argv[1:-1]:
+        sys.exit(install_from(sys.argv[sys.argv.index("--install-from") + 1]))
+    if "--cleanup-update" in sys.argv:
+        from revise import selfupdate
+
+        selfupdate.cleanup_leftovers()
+        sys.exit(0)
     from revise.gui.app import main
 
     sys.exit(main())
