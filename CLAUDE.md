@@ -47,7 +47,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `gui/help_dialog.py` | « Comment ça marche ? » (F1) : mode d'emploi et raccourcis clavier |
 | `gui/backup_dialog.py`, `gui/update_dialog.py` | fenêtres « Sauvegarde » et « Mise à jour » (boutons en bas de la barre latérale) |
 | `gui/render.py` | `show_markdown(view, texte)` : à utiliser pour tout texte de carte (formules + code coloré par pygments) |
-| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`, `step_header` pour les étapes numérotées, `Background`), `theme.py` (couleurs, QSS, icônes dessinées) ; `courses.py` dessine la colonne « Maîtrise » avec `MasteryBar` |
+| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`, `step_header` pour les étapes numérotées, `Background`, `flow` / `FlowLayout` pour une rangée de boutons qui passe à la ligne), `theme.py` (couleurs, QSS, icônes dessinées) ; `courses.py` dessine la colonne « Maîtrise » avec `MasteryBar` |
 | `packaging/revise_gui.py` | point d'entrée des exécutables ; `make_icon.py` ; `INSTALLATION.md` = notes de la Release ; `.github/workflows/release.yml` : tests, PyInstaller (exe Windows, .dmg Mac arm64 + Intel), Release |
 
 ## Conventions
@@ -57,7 +57,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
   Pour en ajouter un : `cli.pick_engine` (+ `choices` de `--moteur`) et `gui/import_page.py` (`ENGINES`, `make_engine`, bouton radio).
 - Ajouter une page : la créer avec `refresh()`, l'ajouter au tuple de `MainWindow.__init__` et à `show_page`.
   Les pages défilent (petite fenêtre, Windows à 125-150 %) : ne pas compter sur la hauteur de la fenêtre ;
-  vérifier avec `QT_SCALE_FACTOR=1.5` et une fenêtre de 1280×690.
+  vérifier avec `QT_SCALE_FACTOR=1.5` et une fenêtre de 1280×690. Une rangée de nombreux boutons : `common.flow`
+  (pas `row`, qui déborde en largeur).
 - Erreurs utilisateur : lever `ReviseError` avec un message en français.
 - Les tests n'utilisent ni le réseau ni les réglages réels (fixture `isolated_settings` dans `tests/conftest.py`) ; les moteurs IA reçoivent de faux `chat`/`post`/`opener`.
 - Le QCM et « Apprendre » ne modifient jamais le planning FSRS.
@@ -87,5 +88,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
   séance et la fenêtre d'aide n'ont pas été retouchées après relecture (réglages du QCM peu guidés, « 0 min » en fin
   de séance courte, noms de mois qui se chevauchent dans « Régularité »). Pages qui défilent (0.8.0) : contrôlées
   hors écran à 150 % (1280×690), pas sur un vrai Windows.
+- Service sans clé : sortie coupée vers 1500 jetons (d'où `reasoning_effort: low` et `KEYLESS_BATCH` = 4 questions par
+  lot de pièges) ; peu de cartes par morceau (≈ 4 pour 7 000 caractères). Si un service avec clé tombe en panne au
+  milieu des pièges, la suite passe au sans-clé avec des lots de 10 (réponse coupée possible : pièges à refaire).
 - Les noms de modèles par défaut de `online.PROVIDERS` peuvent être périmés : si le service refuse le modèle,
   `OnlineEngine._replace_model` en choisit un dans la liste du service (`pick_model`) et l'enregistre.

@@ -60,7 +60,8 @@ figure lui sont envoyées en PDF, il les regarde). Les autres IA ne lisent que l
 **Réponses pièges des QCM.** Après les cartes, l'IA écrit pour chaque question les quatre propositions du QCM : la
 bonne réponse, raccourcie si besoin, et trois fausses réponses crédibles, toutes de la même longueur et de la même
 forme (si l'une se repère à sa longueur, elles sont redemandées une fois). Les cours préparés avant la version 0.8
-n'avaient que les fausses réponses, souvent plus courtes que la bonne : l'onglet QCM propose de les refaire. Sans elles (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
+n'avaient que les fausses réponses, souvent plus courtes que la bonne : l'onglet QCM propose de les refaire.
+Sans réponses pièges (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
 questions du cours, qui se repèrent vite. Pour un cours déjà importé : bouton « Préparer les réponses pièges » de
 l'onglet QCM, ou `revise pieges` (une seule fois par cours, on peut arrêter et reprendre).
 
@@ -77,14 +78,16 @@ Dans l'application :
   examen, et des raccourcis (QCM rapide, fiche, choisir mes cours, ajouter un cours). À la première visite, elle
   montre le mode d'emploi en trois étapes.
 - **Comment ça marche ?** (en bas à gauche, ou touche `F1`) : le mode d'emploi en une page et les raccourcis clavier.
-- **Ajouter un cours** : glisse des PDF (ou « Choisir des PDF… »), choisis qui écrit les cartes, « Créer les cartes ».
+- **Ajouter un cours** : glisse des PDF (ou « Choisir des fichiers… »), choisis qui écrit les cartes (et, pour
+  l'abonnement Claude, le modèle), « Créer les cartes ». « Configurer… » règle les clés de l'IA en ligne.
 - **Mes cours** : coche un ou plusieurs cours (un clic sur la ligne), puis choisis une activité :
   - **Réviser** : planning de répétition espacée (cartes à revoir, puis nouvelles du jour). Les cartes sont
     posées dans un ordre aléatoire et tirées au hasard dans tous les cours cochés ;
   - **Tout revoir** : toutes les cartes tout de suite, dans un ordre aléatoire, jusqu'à les savoir toutes ; les cartes
     déjà connues sont sautées (on peut quitter et reprendre) ;
   - **Lire la fiche** : le cours partie par partie, réponses visibles ;
-  - **QCM** : quatre propositions (touches `1` à `4`, `Entrée` pour continuer), score et erreurs à refaire.
+  - **QCM** : quatre propositions de même longueur (touches `1` à `4`, `Entrée` pour continuer), score et
+    erreurs à refaire.
     Le QCM ne modifie pas le planning de révision.
 - Révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien, `4` facile,
   `E` corriger la carte, `S` ne plus la poser, `X` « Explique-moi », `Échap` terminer.
@@ -111,7 +114,10 @@ Dans l'application :
 En ligne de commande (sans interface) :
 
 ```bash
-revise importer ~/Downloads/*CM*.pdf -m LIFAPSD      # --moteur ia | en-ligne | simple
+revise importer ~/Downloads/*CM*.pdf -m LIFAPSD      # --moteur ia | en-ligne | abonnement | simple
+revise importer cours.pdf --moteur abonnement --claude-modele sonnet   # modèle : auto | opus | sonnet | haiku
+revise cle --fournisseur groq --cle gsk_…            # une clé par service (groq, gemini, cerebras, mistral, openrouter)
+revise cle --sans-cle non                            # couper le service gratuit sans clé
 revise reviser --cours CM7 CM8 --examen
 revise pieges --cours CM7                            # réponses pièges des QCM d'un cours déjà importé
 revise pieges --moteur abonnement                    # … pour tous les cours, avec l'abonnement Claude
@@ -127,7 +133,7 @@ Données : `~/.local/share/revise/revise.db` (SQLite) ; sur Mac `~/Library/Appli
 ## Publier une version (Windows et Mac)
 
 ```bash
-git tag v0.4.0 && git push origin master v0.4.0
+git tag vX.Y.Z && git push origin master vX.Y.Z      # version d'abord changée dans pyproject.toml et __init__.py
 ```
 
 GitHub Actions lance les tests sous Windows et macOS, construit `revise.exe` et les deux `revise-mac-….dmg`
