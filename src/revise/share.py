@@ -17,7 +17,7 @@ from revise.models import CardDraft, ReviseError
 
 EXTENSION = ".revise"
 FORMAT = "revise-cours"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # 2 : `quiz_answer` (bonne réponse au format des pièges)
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_TEXT = 20_000        # longueur maximale d'une question ou d'une réponse
 MAX_DISTRACTORS = 10
@@ -48,6 +48,8 @@ def _cards_payload(db: Database, deck_id: int) -> list[dict]:
         card = {"kind": c.kind, "question": c.question, "answer": c.answer, "page": c.page, "section": c.section}
         if c.distractors:
             card["distractors"] = c.distractors
+        if c.quiz_answer:
+            card["quiz_answer"] = c.quiz_answer
         out.append(card)
     return out
 
@@ -98,7 +100,8 @@ def _draft(raw) -> CardDraft | None:
     distractors = [_text(w, 2000) for w in wrong if isinstance(w, str)][:MAX_DISTRACTORS] if isinstance(wrong, list) else []
     draft = CardDraft(_text(raw.get("kind"), 20), _text(raw.get("question")), _text(raw.get("answer")),
                       page if isinstance(page, int) and not isinstance(page, bool) else None,
-                      _text(raw.get("section"), 300), [w for w in distractors if w])
+                      _text(raw.get("section"), 300), [w for w in distractors if w],
+                      _text(raw.get("quiz_answer"), 2000))
     return draft.normalized()
 
 

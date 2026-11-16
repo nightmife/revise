@@ -17,6 +17,7 @@ class CardDraft:
     page: int | None = None
     section: str = ""
     distractors: list[str] = field(default_factory=list)  # mauvaises réponses de QCM écrites par l'IA
+    quiz_answer: str = ""  # bonne réponse réécrite par l'IA au même format que les pièges ("" = `answer`)
 
     def normalized(self) -> CardDraft | None:
         q, a = self.question.strip(), self.answer.strip()
@@ -24,7 +25,7 @@ class CardDraft:
             return None
         kind = self.kind if self.kind in KINDS else "qa"
         page = self.page if isinstance(self.page, int) and self.page > 0 else None
-        return CardDraft(kind, q, a, page, self.section.strip(), list(self.distractors))
+        return CardDraft(kind, q, a, page, self.section.strip(), list(self.distractors), self.quiz_answer.strip())
 
 
 class ReviseError(Exception):

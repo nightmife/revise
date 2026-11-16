@@ -17,7 +17,7 @@ from revise.gui.common import cloze_question, confirm, fill_scope_combo, muted, 
 from revise.gui.render import show_markdown
 from revise.gui.review import markdown_view
 from revise.models import ReviseError
-from revise.quiz import QuizQuestion, build_quiz, prepared_count, usable_count
+from revise.quiz import QuizQuestion, build_quiz, outdated_count, prepared_count, usable_count
 
 
 class PrepareWorker(QObject):
@@ -40,7 +40,8 @@ class PrepareWorker(QObject):
             self.engine = distractors.default_engine()
             getattr(self.engine, "check", lambda: None)()
             self.engine.progress = self.status.emit
-            distractors.prepare(db, self.deck_ids, self.engine.chat, self.status.emit, lambda: self.cancelled)
+            distractors.prepare(db, self.deck_ids, self.engine.chat, self.status.emit, lambda: self.cancelled,
+                                getattr(self.engine, "trap_batch", distractors.BATCH))
         except ReviseError as e:
             error = str(e)
         except Exception as e:  # une panne de l'IA ne doit pas fermer l'application
@@ -294,6 +295,12 @@ class QuizPage(QWidget):
             self.traps_title.setText("Réponses pièges prêtes")
             self.traps_text.setText("Pour chaque question, l'IA a écrit de fausses réponses crédibles : "
                                     "impossible de deviner sans connaître le cours.")
+        elif outdated_count(cards) == missing:
+            self.traps_title.setText("Réponses pièges à refaire")
+            self.traps_text.setText(
+                f"Pour {missing} question{'s' if missing > 1 else ''}, les réponses pièges datent d'une ancienne "
+                "version : la bonne réponse se repère souvent parce qu'elle est plus longue ou plus détaillée. "
+                "L'IA peut réécrire les quatre propositions pour qu'elles se ressemblent.")
         else:
             self.traps_title.setText("QCM trop facile pour l'instant" if missing == len(cards)
                                      else f"Réponses pièges prêtes pour {len(cards) - missing} questions "
@@ -313,7 +320,8 @@ class QuizPage(QWidget):
         online = engine == "en-ligne"
         how = ("Claude (ton abonnement) va écrire les réponses pièges : compte environ une minute pour cent "
                "questions." if engine == "abonnement" else
-               "L'IA en ligne va écrire les réponses pièges : compte une à deux minutes pour cent questions. "
+               "L'IA en ligne va écrire les réponses pièges : compte une à deux minutes pour cent questions avec "
+               "une clé (sans clé : environ un quart d'heure). "
                "Les questions du cours sont envoyées au service d'IA choisi." if online else
                "L'IA installée sur cet ordinateur va écrire les réponses pièges. Si elle n'a encore jamais servi, "
                "elle est d'abord téléchargée (2,5 à 7 Go, une seule fois). Ensuite, compte plusieurs minutes "

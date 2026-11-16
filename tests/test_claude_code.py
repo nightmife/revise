@@ -94,3 +94,23 @@ def test_stream_output_without_result_is_an_error():
         return SimpleNamespace(returncode=1, stdout='{"type": "system"}\npas du json', stderr="")
     with pytest.raises(ReviseError):
         ClaudeCodeEngine(runner).chat_pdf("s", "u", b"x")
+
+
+def test_model_choice(monkeypatch):
+    from revise import config
+
+    monkeypatch.delenv("REVISE_MODELE", raising=False)
+    seen = []
+
+    def runner(cmd, **kw):
+        seen.append(cmd[cmd.index("--model") + 1] if "--model" in cmd else None)
+        return ok({"items": []})
+
+    ClaudeCodeEngine(runner).chat("s", "u")
+    config.save({"claude_model": "opus"})
+    ClaudeCodeEngine(runner).chat("s", "u")
+    ClaudeCodeEngine(runner, model="haiku").chat("s", "u")       # choisi en ligne de commande : prioritaire
+    config.save({"claude_model": "n'importe quoi"})
+    ClaudeCodeEngine(runner).chat("s", "u")
+    assert seen == [None, "opus", "haiku", None]
+    assert set(claude_code.MODELS) == {"", "opus", "sonnet", "haiku"}

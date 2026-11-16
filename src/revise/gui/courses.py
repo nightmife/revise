@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCalendarWidget, QCheckBox, QDialog, QFileDialog,
 from revise import config, exam, share, today
 from revise.db import Database, deck_label, parse_iso, utcnow
 from revise.gui import theme
-from revise.gui.common import ActionCard, confirm, muted, page_header, row
+from revise.gui.common import ActionCard, confirm, flow, muted, page_header, row
 from revise.models import ReviseError
 
 DECK_ROLE = Qt.ItemDataRole.UserRole
@@ -189,8 +189,8 @@ class CoursesPage(QWidget):
         self.delete_btn = QPushButton("Supprimer")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.clicked.connect(self._delete)
-        lay.addLayout(row(self.all_btn, self.none_btn, self.selection_label, None, self.edit_btn,
-                          self.exam_btn_date, self.share_btn, self.delete_btn))
+        lay.addWidget(flow(self.all_btn, self.none_btn, self.selection_label, self.edit_btn,
+                           self.exam_btn_date, self.share_btn, self.delete_btn))
 
         self.what = QLabel("Que veux-tu faire ?")
         self.what.setObjectName("section")

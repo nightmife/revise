@@ -13,11 +13,19 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from revise import config
 from revise.engines import Progress, distractors
 from revise.engines.prompt import CARD_SCHEMA, generate_cards
 from revise.models import CardDraft, ReviseError
 
 TIMEOUT = 1200  # secondes par appel
+# Modèle choisi (réglage `claude_model`) -> nom affiché. Des alias de Claude Code : toujours la dernière version.
+MODELS = {
+    "": "Automatique (celui de Claude Code)",
+    "opus": "Opus — le meilleur, le plus lent",
+    "sonnet": "Sonnet — très bon et rapide",
+    "haiku": "Haiku — le plus rapide, moins précis",
+}
 # Une application lancée depuis le Finder ou le menu ne connaît pas le PATH du terminal.
 EXTRA_DIRS = ("~/.local/bin", "~/.claude/local", "/opt/homebrew/bin", "/usr/local/bin")
 
@@ -47,7 +55,8 @@ class ClaudeCodeEngine:
 
     def __init__(self, runner=subprocess.run, model: str | None = None):
         self.runner = runner
-        self.model = model or os.environ.get("REVISE_MODELE") or None
+        saved = config.load().get("claude_model")
+        self.model = (model or os.environ.get("REVISE_MODELE") or (saved if saved in MODELS else "")) or None
         self.progress: Progress = lambda m: None
 
     def check(self) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 
 from revise.models import CardDraft
-from revise.quiz import build_quiz, choice_text, prepared_count, usable_count
+from revise.quiz import build_quiz, choice_text, outdated_count, prepared_count, usable_count
 from revise.scheduler import Session
 
 
@@ -48,10 +48,19 @@ def test_ai_distractors_come_first(db):
         CardDraft("qa", "Qu'est-ce qu'une pile ?", "Une structure LIFO.", 2, "Structures"),
         CardDraft("qa", "Qu'est-ce qu'une file ?", "Une structure FIFO.", 3, "Structures")])
     cards = db.cards(deck_id=deck)
-    assert cards[0].distractors == wrong and prepared_count(cards) == 1
+    assert cards[0].distractors == wrong and prepared_count(cards) == 0 and outdated_count(cards) == 1
     for seed in range(5):
         q = next(q for q in build_quiz(cards, 3, random.Random(seed)) if q.card.id == cards[0].id)
         assert sorted(q.choices) == sorted(["O(n log n)", "O(n)", "O(n^2)", "O(log n)"])
+    # Propositions réécrites par l'IA : le QCM montre la bonne réponse au même format que les pièges.
+    db.set_distractors(cards[0].id, ["O(n)", "O(n²)", "O(log n)"], "O(n·log n)")
+    cards = db.cards(deck_id=deck)
+    assert prepared_count(cards) == 1 and outdated_count(cards) == 0
+    q = next(q for q in build_quiz(cards, 3, random.Random(1)) if q.card.id == cards[0].id)
+    assert q.choices[q.correct] == "O(n·log n)" and sorted(q.choices) == sorted(["O(n·log n)", "O(n)", "O(n²)",
+                                                                                  "O(log n)"])
+    db.set_distractors(cards[0].id, wrong)
+    cards = db.cards(deck_id=deck)
     # Corriger la réponse d'une carte efface ses pièges ; changer seulement la page les garde.
     db.update_card_content(cards[0].id, "qa", cards[0].question, cards[0].answer, 7)
     assert db.card(cards[0].id).distractors == wrong

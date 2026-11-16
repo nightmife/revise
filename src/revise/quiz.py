@@ -2,7 +2,8 @@
 
 Les mauvaises réponses sont, dans l'ordre de préférence :
 1. celles écrites par l'IA pour cette question (`Card.distractors`) : elles répondent à la
-   même question, donc il faut connaître le cours pour trancher ;
+   même question, donc il faut connaître le cours pour trancher. La bonne réponse est alors celle que
+   l'IA a réécrite au même format (`Card.quiz_answer`), pour qu'elle ne se repère pas à sa longueur ;
 2. à défaut, les réponses d'autres cartes, choisies pour ressembler le plus possible à une
    réponse à cette question (même cours, même partie, question et réponse de même forme)."""
 
@@ -96,10 +97,21 @@ def _closeness(card: Card, fc: _Features, other: Card, fo: _Features) -> float:
     return score
 
 
+def right_answer(card: Card) -> str:
+    """Bonne réponse telle que le QCM la propose."""
+    return choice_text(card.quiz_answer if card.quiz_answer and card.distractors else card.answer)
+
+
+def is_prepared(card: Card) -> bool:
+    """Propositions de QCM écrites par l'IA, bonne réponse comprise (depuis la version 0.8 ; avant, seules les
+    mauvaises réponses étaient écrites, souvent plus courtes que la bonne)."""
+    return bool(card.distractors) and bool(card.quiz_answer)
+
+
 def distractors(card: Card, pool: list[Card], rng: random.Random, n: int = CHOICES - 1,
                 features: dict[int, _Features] | None = None) -> list[str]:
     """Jusqu'à `n` mauvaises réponses, toutes différentes entre elles et de la bonne."""
-    seen = {_norm(card.answer), _norm(choice_text(card.answer))}
+    seen = {_norm(card.answer), _norm(choice_text(card.answer)), _norm(right_answer(card))}
     out: list[str] = []
     own = list(card.distractors)
     rng.shuffle(own)
@@ -147,8 +159,13 @@ def usable_count(cards: list[Card]) -> int:
 
 
 def prepared_count(cards: list[Card]) -> int:
-    """Nombre de cartes dont les mauvaises réponses ont été écrites par l'IA."""
-    return sum(1 for c in cards if c.distractors)
+    """Nombre de cartes dont les propositions de QCM ont été écrites par l'IA (format actuel)."""
+    return sum(1 for c in cards if is_prepared(c))
+
+
+def outdated_count(cards: list[Card]) -> int:
+    """Cartes aux mauvaises réponses d'avant la version 0.8 : la bonne se repère souvent à sa longueur."""
+    return sum(1 for c in cards if c.distractors and not c.quiz_answer)
 
 
 def build_quiz(cards: list[Card], count: int, rng: random.Random | None = None,
@@ -168,7 +185,7 @@ def build_quiz(cards: list[Card], count: int, rng: random.Random | None = None,
         wrong = distractors(card, pool, rng, features=features)
         if not wrong:
             continue
-        right = choice_text(card.answer)
+        right = right_answer(card)
         choices = wrong + [right]
         rng.shuffle(choices)
         questions.append(QuizQuestion(card, choices, choices.index(right)))

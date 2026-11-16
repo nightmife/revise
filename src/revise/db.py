@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS cards(
     due TEXT NOT NULL,         -- ISO 8601 UTC, comparable lexicographiquement
     suspended INTEGER NOT NULL DEFAULT 0,
     created TEXT NOT NULL,
-    distractors TEXT           -- mauvaises réponses de QCM (liste JSON), NULL = pas encore préparées
+    distractors TEXT,          -- mauvaises réponses de QCM (liste JSON), NULL = pas encore préparées
+    quiz_answer TEXT           -- bonne réponse au format des mauvaises (QCM), NULL = prendre `answer`
 );
 CREATE INDEX IF NOT EXISTS cards_due ON cards(due);
 CREATE INDEX IF NOT EXISTS cards_deck ON cards(deck_id);
@@ -103,6 +104,7 @@ class Card:
     due: str
     suspended: bool
     distractors: list[str] = field(default_factory=list)
+    quiz_answer: str = ""  # bonne réponse telle que le QCM la montre ("" = `answer`)
 
     @property
     def is_new(self) -> bool:
@@ -135,6 +137,10 @@ class Database:
         if "distractors" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(cards)")}:
             with self.conn:
                 self.conn.execute("ALTER TABLE cards ADD COLUMN distractors TEXT")
+        # Bases créées avant la version 0.8 : pas de bonne réponse réécrite pour le QCM.
+        if "quiz_answer" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(cards)")}:
+            with self.conn:
+                self.conn.execute("ALTER TABLE cards ADD COLUMN quiz_answer TEXT")
         # Bases créées avant la version 0.6 : pas de date d'examen.
         if "exam_date" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(decks)")}:
             with self.conn:
@@ -224,10 +230,11 @@ class Database:
 
     def _insert_card(self, deck_id: int, c: CardDraft, now: str) -> int:
         cur = self.conn.execute(
-            "INSERT INTO cards(deck_id, kind, question, answer, page, section, fsrs, due, created, distractors)"
-            " VALUES (?,?,?,?,?,?,NULL,?,?,?)",
+            "INSERT INTO cards(deck_id, kind, question, answer, page, section, fsrs, due, created, distractors,"
+            " quiz_answer) VALUES (?,?,?,?,?,?,NULL,?,?,?,?)",
             (deck_id, c.kind, c.question, c.answer, c.page, c.section, now, now,
-             json.dumps(c.distractors, ensure_ascii=False) if c.distractors else None))
+             json.dumps(c.distractors, ensure_ascii=False) if c.distractors else None,
+             c.quiz_answer or None))
         return int(cur.lastrowid)
 
     def add_card(self, deck_id: int, c: CardDraft) -> int:
@@ -281,17 +288,19 @@ class Database:
         return self._card(row) if row else None
 
     def update_card_content(self, card_id: int, kind: str, question: str, answer: str, page: int | None) -> None:
-        """Une carte dont la question ou la réponse change perd ses mauvaises réponses de QCM."""
+        """Une carte dont la question ou la réponse change perd ses propositions de QCM."""
         with self.conn:
             self.conn.execute(
                 "UPDATE cards SET distractors = CASE WHEN question = ? AND answer = ? THEN distractors END,"
+                " quiz_answer = CASE WHEN question = ? AND answer = ? THEN quiz_answer END,"
                 " kind=?, question=?, answer=?, page=? WHERE id=?",
-                (question, answer, kind, question, answer, page, card_id))
+                (question, answer, question, answer, kind, question, answer, page, card_id))
 
-    def set_distractors(self, card_id: int, distractors: list[str]) -> None:
+    def set_distractors(self, card_id: int, distractors: list[str], quiz_answer: str = "") -> None:
         with self.conn:
-            self.conn.execute("UPDATE cards SET distractors = ? WHERE id = ?",
-                              (json.dumps(distractors, ensure_ascii=False) if distractors else None, card_id))
+            self.conn.execute("UPDATE cards SET distractors = ?, quiz_answer = ? WHERE id = ?",
+                              (json.dumps(distractors, ensure_ascii=False) if distractors else None,
+                               quiz_answer or None, card_id))
 
     def delete_card(self, card_id: int) -> None:
         with self.conn:
@@ -368,4 +377,4 @@ class Database:
             wrong = []
         return Card(r["id"], r["deck_id"], r["kind"], r["question"], r["answer"], r["page"], r["section"],
                     r["fsrs"], r["due"], bool(r["suspended"]),
-                    [str(w) for w in wrong] if isinstance(wrong, list) else [])
+                    [str(w) for w in wrong] if isinstance(wrong, list) else [], r["quiz_answer"] or "")

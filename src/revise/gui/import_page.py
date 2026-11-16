@@ -7,14 +7,14 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog,
-                               QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton, QVBoxLayout,
-                               QWidget)
+                               QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QRadioButton,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 from revise import config, documents, share
 from revise.db import Database, file_sha256
 from revise.engines import online
-from revise.engines.claude_code import claude_binary
+from revise.engines.claude_code import MODELS as CLAUDE_MODELS, claude_binary
 from revise.gui.common import muted, page_header, row, save_cancel_buttons, step_header
 from revise.importer import guess_subject, import_pdf
 from revise.models import ReviseError
@@ -37,71 +37,125 @@ def make_engine(name: str):
 
 
 class KeyDialog(QDialog):
-    """Réglages de l'IA en ligne : service et clé ; modèle et adresse pour ceux qui savent."""
+    """Réglages de l'IA en ligne : une clé gratuite par service (facultatives), le service essayé en premier,
+    le service sans clé ; adresse et modèle d'un autre service pour ceux qui savent."""
+
+    KEYED = [p for p in online.PROVIDERS if p not in (online.KEYLESS, "autre")]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Configurer l'IA en ligne")
-        self.resize(640, 320)
-        form = QFormLayout(self)
-        form.addRow(muted("L'IA en ligne est gratuite, mais il faut une « clé » : un mot de passe que le service "
-                          "te donne pour l'utiliser. Deux minutes, une seule fois."))
-        self.provider = QComboBox()
-        for key, (label, *_rest) in online.PROVIDERS.items():
-            self.provider.addItem(label, key)
-        self.link = QLabel()
-        self.link.setOpenExternalLinks(True)
-        self.link.setWordWrap(True)
-        self.key = QLineEdit()
-        self.key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key.setPlaceholderText("colle ta clé ici")
-        self.model = QLineEdit()
-        self.url = QLineEdit()
-        self.advanced = QCheckBox("Réglages avancés (modèle, adresse)")
-        self.model_label, self.url_label = QLabel("Modèle :"), QLabel("Adresse :")
-        form.addRow("1. Service :", self.provider)
-        form.addRow("2. Clé :", self.link)
-        form.addRow("3. Colle-la :", self.key)
-        form.addRow(self.advanced)
-        form.addRow(self.model_label, self.model)
-        form.addRow(self.url_label, self.url)
-        form.addRow(muted("La clé reste sur cet ordinateur. Le texte de tes cours est envoyé au service choisi."))
+        self.resize(760, 560)
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        body.setObjectName("scrollBody")
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+        lay = QVBoxLayout(body)
+        lay.addWidget(muted(
+            "L'IA en ligne marche tout de suite, sans rien faire : un service gratuit sans clé écrit les cartes, "
+            "mais lentement (une réponse toutes les 45 secondes, compte un quart d'heure par cours).\n"
+            "Pour aller beaucoup plus vite, crée une « clé » gratuite (un mot de passe que le service te donne) : "
+            "deux minutes, une seule fois. Tu peux en mettre plusieurs : quand le quota gratuit de l'une est "
+            "épuisé, l'application passe toute seule à la suivante."))
+        cfg = config.load()
+        keys = online._keys(cfg)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        self.keys: dict[str, QLineEdit] = {}
+        for i, provider in enumerate(self.KEYED):
+            label, _, _, page = online.PROVIDERS[provider]
+            name = QLabel(f"<b>{label}</b>")
+            link = QLabel(f"<a href='{page}' style='color:#8aa3ff'>créer une clé</a>")
+            link.setOpenExternalLinks(True)
+            link.setToolTip(page)
+            edit = QLineEdit(keys.get(provider, ""))
+            edit.setEchoMode(QLineEdit.EchoMode.Password)
+            edit.setPlaceholderText("colle ta clé ici (facultatif)")
+            edit.textChanged.connect(self._fill_first)
+            self.keys[provider] = edit
+            grid.addWidget(name, i, 0, Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(edit, i, 1)
+            grid.addWidget(link, i, 2)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+        lay.addWidget(muted("Groq et Cerebras sont les plus rapides. Sur la page du service : crée un compte "
+                            "gratuit, clique sur le bouton qui crée une clé (« API key »), copie-la et colle-la ici."))
+
+        self.first = QComboBox()
+        self.first.setToolTip("Les autres services qui ont une clé servent de secours, dans l'ordre de la liste.")
+        lay.addLayout(row(muted("Essayer d'abord :"), self.first, None))
+        self.keyless = QCheckBox("Utiliser le service sans clé (Pollinations) quand aucune clé ne marche")
+        self.keyless.setChecked(online.keyless_allowed())
+        lay.addWidget(self.keyless)
+
+        self.advanced = QCheckBox("Autre service compatible OpenAI (adresse, modèle, clé)")
+        self.url, self.model, self.other_key = QLineEdit(), QLineEdit(), QLineEdit()
+        self.url.setPlaceholderText("https://…/v1")
+        self.model.setPlaceholderText("nom du modèle")
+        self.other_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.other_key.setPlaceholderText("clé")
+        other = online.settings("autre")
+        self.url.setText(other["url"])
+        self.model.setText(other["model"])
+        self.other_key.setText(keys.get("autre", ""))
+        self.other_box = QWidget()
+        form = QFormLayout(self.other_box)
+        form.setContentsMargins(24, 0, 0, 0)
+        form.addRow("Adresse :", self.url)
+        form.addRow("Modèle :", self.model)
+        form.addRow("Clé :", self.other_key)
+        for w in (self.url, self.model, self.other_key):
+            w.textChanged.connect(self._fill_first)
+        self.advanced.setChecked(bool(other["url"] or keys.get("autre")))
+        self.other_box.setVisible(self.advanced.isChecked())
+        self.advanced.toggled.connect(self.other_box.setVisible)
+        lay.addWidget(self.advanced)
+        lay.addWidget(self.other_box)
+        lay.addWidget(muted("Les clés restent sur cet ordinateur. Le texte de tes cours est envoyé au service "
+                            "qui écrit les cartes."))
+        lay.addStretch(1)
         buttons = save_cancel_buttons()
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        outer.addWidget(buttons)
+        self._wanted_first = online.preferred()
+        self._fill_first()
 
-        current = online.settings()
-        self.provider.setCurrentIndex(max(0, self.provider.findData(current["provider"])))
-        self.key.setText(config.load().get("online_key", ""))
-        self._provider_changed()
-        self.model.setText(current["model"])
-        self.url.setText(current["url"])
-        self.provider.currentIndexChanged.connect(self._provider_changed)
-        self.advanced.toggled.connect(self._show_advanced)
-        self._show_advanced()
+    def _entered(self) -> dict[str, str]:
+        out = {p: e.text().strip() for p, e in self.keys.items() if e.text().strip()}
+        if self.other_key.text().strip() and self.url.text().strip() and self.model.text().strip():
+            out["autre"] = self.other_key.text().strip()
+        return out
 
-    def _show_advanced(self, *_) -> None:
-        """Modèle et adresse : cachés, sauf pour un service « autre » qui n'a pas de valeurs par défaut."""
-        show = self.advanced.isChecked() or self.provider.currentData() == "autre"
-        for w in (self.model_label, self.model, self.url_label, self.url):
-            w.setVisible(show)
-
-    def _provider_changed(self) -> None:
-        _, url, model, page = online.PROVIDERS[self.provider.currentData()]
-        self.model.setText(model)
-        self.url.setText(url)
-        self.link.setText(f"Ouvre <a href='{page}' style='color:#8aa3ff'>{page}</a>, crée un compte gratuit, "
-                          "puis clique sur le bouton qui crée une clé et copie-la." if page
-                          else "Indique l'adresse de l'API (elle finit souvent par /v1) et le nom du modèle.")
-        self._show_advanced()
+    def _fill_first(self, *_) -> None:
+        current = self.first.currentData() or self._wanted_first
+        self.first.blockSignals(True)
+        self.first.clear()
+        for provider in [p for p in online.FALLBACK_ORDER if p in self._entered()] + [online.KEYLESS]:
+            self.first.addItem(online.PROVIDERS[provider][0], provider)
+        self.first.setCurrentIndex(max(0, self.first.findData(current)))
+        self.first.blockSignals(False)
 
     def _save(self) -> None:
-        if not self.key.text().strip():
-            QMessageBox.warning(self, "Clé manquante", "Colle ta clé avant d'enregistrer.")
+        keys = self._entered()
+        first = self.first.currentData() or online.KEYLESS
+        if not keys and not self.keyless.isChecked():
+            QMessageBox.warning(self, "Aucune clé", "Colle au moins une clé, ou garde le service sans clé.")
             return
-        config.save({"online_provider": self.provider.currentData(), "online_key": self.key.text().strip(),
-                     "online_model": self.model.text().strip(), "online_url": self.url.text().strip()})
+        if first == online.KEYLESS and keys and not self.keyless.isChecked():
+            first = next(p for p in online.FALLBACK_ORDER if p in keys)
+        cfg = config.load()
+        models = cfg.get("online_models") if isinstance(cfg.get("online_models"), dict) else {}
+        values = {"online_keys": keys, "online_key": "", "online_keyless": self.keyless.isChecked(),
+                  "online_provider": first, "online_url": self.url.text().strip(),
+                  "online_models": {**models, "autre": self.model.text().strip()}}
+        if first != cfg.get("online_provider"):
+            values["online_model"] = ""  # modèle propre à l'ancien service choisi
+        config.save(values)
         self.accept()
 
 
@@ -205,7 +259,7 @@ class ImportPage(QWidget):
         self.count_label.setWordWrap(False)
         lay.addLayout(row(self.search, self.count_label))
         self.files = QListWidget()
-        self.files.setMinimumHeight(110)
+        self.files.setMinimumHeight(190)  # au moins 5 fichiers visibles
         lay.addWidget(self.files, 1)
 
         self.subject = QComboBox()
@@ -218,7 +272,7 @@ class ImportPage(QWidget):
         lay.addLayout(step_header(2, "Qui écrit les cartes ?"))
         self.engine_group = QButtonGroup(self)
         self.r_ia = QRadioButton("L'IA de cet ordinateur (conseillé)")
-        self.r_online = QRadioButton("L'IA en ligne (le plus rapide)")
+        self.r_online = QRadioButton("L'IA en ligne")
         self.r_simple = QRadioButton("Sans IA")
         self.r_claude = QRadioButton("Mon abonnement Claude")
         key_btn = QPushButton("Configurer…")
@@ -228,14 +282,26 @@ class ImportPage(QWidget):
         details = {
             self.r_ia: "Gratuit, privé, sans compte. Lent : plusieurs minutes par cours, et un gros téléchargement "
                        "la première fois (2,5 à 7 Go).",
-            self.r_online: "Quelques secondes par cours. Gratuit, mais il faut créer une clé (2 minutes) "
-                           "et le texte du cours est envoyé sur Internet.",
+            self.r_online: "Gratuit, et marche sans rien régler (environ un quart d'heure par cours). Avec une "
+                           "clé gratuite (2 minutes à créer) : quelques secondes. Le texte du cours est envoyé "
+                           "sur Internet.",
             self.r_simple: "Immédiat, mais cartes approximatives à corriger et QCM facile.",
             self.r_claude: "Rapide et de très bonne qualité, sans clé : passe par Claude Code, installé et connecté "
                            "sur cet ordinateur. Lit aussi les pages scannées et les schémas des PDF. "
                            "Compte dans les limites de ton abonnement.",
         }
         has_claude = claude_binary() is not None  # proposé seulement à ceux qui ont Claude Code
+        self.claude_model = QComboBox()
+        for key, label in CLAUDE_MODELS.items():
+            self.claude_model.addItem(label, key)
+        saved_model = config.load().get("claude_model", "")
+        self.claude_model.setCurrentIndex(max(0, self.claude_model.findData(saved_model)))
+        self.claude_model.setToolTip("Le modèle de Claude qui écrit les cartes, les réponses pièges et les "
+                                     "explications. Opus consomme plus vite les limites de l'abonnement.")
+        self.claude_model.currentIndexChanged.connect(
+            lambda: config.save({"claude_model": self.claude_model.currentData()}))
+        claude_model_label = muted("Modèle :")
+        claude_model_label.setWordWrap(False)
         for i, r in enumerate((self.r_ia, self.r_online, self.r_simple, self.r_claude)):
             self.engine_group.addButton(r, i)
             font = r.font()
@@ -243,14 +309,16 @@ class ImportPage(QWidget):
             r.setFont(font)
             if r is self.r_online:
                 lay.addLayout(row(r, key_btn, self.key_state, None))
+            elif r is self.r_claude:
+                lay.addLayout(row(r, claude_model_label, self.claude_model, None))
             else:
                 lay.addWidget(r)
             detail = muted(details[r])
             detail.setContentsMargins(30, 0, 0, 4)
             lay.addWidget(detail)
             if r is self.r_claude:
-                r.setVisible(has_claude)
-                detail.setVisible(has_claude)
+                for w in (r, detail, claude_model_label, self.claude_model):
+                    w.setVisible(has_claude)
         saved = config.load().get("engine")
         if saved not in ENGINES or (saved == "abonnement" and not has_claude):
             saved = "ia"
@@ -411,9 +479,7 @@ class ImportPage(QWidget):
         return ENGINES[self.engine_group.checkedId()]
 
     def _update_key_state(self) -> None:
-        conf = online.settings()
-        self.key_state.setText(f"prête ({online.PROVIDERS[conf['provider']][0]})" if conf["key"]
-                               else "pas encore configurée")
+        self.key_state.setText(online.describe())
 
     def edit_key(self) -> bool:
         ok = KeyDialog(self).exec() == QDialog.DialogCode.Accepted
@@ -430,7 +496,7 @@ class ImportPage(QWidget):
         subject = None if (not subject or subject == AUTO_SUBJECT) else subject
         engine = self.engine_name()
         needs_ai = any(not share.is_share_file(p) for p in pdfs)
-        if needs_ai and engine == "en-ligne" and not online.settings()["key"] and not self.edit_key():
+        if needs_ai and engine == "en-ligne" and not online.chain() and not self.edit_key():
             return
         config.save({"engine": engine})
         self.progress.setRange(0, len(pdfs))

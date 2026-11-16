@@ -21,14 +21,15 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def pick_engine(name: str):
+def pick_engine(name: str, claude_model: str | None = None):
     from revise.engines.claude_code import ClaudeCodeEngine
     from revise.engines.embedded import EmbeddedEngine
     from revise.engines.online import OnlineEngine
     from revise.engines.simple import SimpleEngine
 
-    return {"auto": EmbeddedEngine, "ia": EmbeddedEngine, "en-ligne": OnlineEngine, "simple": SimpleEngine,
-            "abonnement": ClaudeCodeEngine}[name]()
+    if name == "abonnement":
+        return ClaudeCodeEngine(model=claude_model if claude_model not in (None, "auto") else None)
+    return {"auto": EmbeddedEngine, "ia": EmbeddedEngine, "en-ligne": OnlineEngine, "simple": SimpleEngine}[name]()
 
 
 # --------------------------------------------------------------- commandes ---
@@ -51,7 +52,7 @@ def cmd_import(db: Database, args) -> int:
                                   f"[bold]{r.cards} cartes[/]")
             continue
         if engine is None:
-            engine = pick_engine(args.moteur)
+            engine = pick_engine(args.moteur, args.claude_modele)
         subject = args.matiere or guess_subject(pdf)
         try:
             with console.status(f"{pdf.name}…") as status:
@@ -105,20 +106,34 @@ def cmd_restore(db: Database, args) -> int:
 
 def cmd_key(db: Database, args) -> int:
     from revise import config
-    from revise.engines.online import PROVIDERS, settings
+    from revise.engines import online
 
-    values = {k: v for k, v in (("online_provider", args.fournisseur), ("online_key", args.cle),
-                                ("online_model", args.modele), ("online_url", args.url)) if v is not None}
+    cfg = config.load()
+    values: dict = {}
+    provider = args.fournisseur or online.preferred()
     if args.fournisseur:  # changer de fournisseur remet son adresse et son modèle par défaut
-        values.setdefault("online_model", "")
-        values.setdefault("online_url", "")
+        values.update(online_provider=args.fournisseur, online_model="", online_url="")
+    if args.cle is not None:
+        keys = online._keys(cfg)
+        keys[provider] = args.cle.strip()
+        values.update(online_keys={p: k for p, k in keys.items() if k}, online_key="")
+    if args.modele is not None:
+        values["online_model"] = args.modele
+    if args.url is not None:
+        values["online_url"] = args.url
+    if args.sans_cle is not None:
+        values["online_keyless"] = args.sans_cle == "oui"
     if values:
         config.save(values)
-    s = settings()
-    console.print(f"Service : [bold]{PROVIDERS[s['provider']][0]}[/]  ({s['url'] or 'adresse à préciser avec --url'})")
+    s = online.settings()
+    console.print(f"Service essayé en premier : [bold]{online.PROVIDERS[s['provider']][0]}[/]  "
+                  f"({s['url'] or 'adresse à préciser avec --url'})")
     console.print(f"Modèle : {s['model'] or 'à préciser avec --modele'}")
-    console.print("Clé : " + ("enregistrée" if s["key"] else f"[yellow]aucune[/] — crée-la sur "
-                                                              f"{PROVIDERS[s['provider']][3] or 'le site du service'}"))
+    if s["provider"] != online.KEYLESS:
+        console.print("Clé : " + ("enregistrée" if s["key"] else f"[yellow]aucune[/] — crée-la sur "
+                                  f"{online.PROVIDERS[s['provider']][3] or 'le site du service'}"))
+    console.print("Ordre d'essai : " + (" → ".join(online.PROVIDERS[c["provider"]][0] for c in online.chain())
+                                         or "[yellow]aucun service utilisable[/]"))
     return 0
 
 
@@ -133,12 +148,13 @@ def cmd_traps(db: Database, args) -> int:
     if not missing:
         console.print("Toutes les questions ont déjà leurs réponses pièges.")
         return 0
-    engine = pick_engine(args.moteur) if args.moteur else distractors.default_engine()
+    engine = pick_engine(args.moteur, args.claude_modele) if args.moteur else distractors.default_engine()
     try:
         getattr(engine, "check", lambda: None)()
         with console.status(f"{missing} questions à préparer…") as status:
             engine.progress = status.update
-            filled = distractors.prepare(db, deck_ids, engine.chat, status.update)
+            filled = distractors.prepare(db, deck_ids, engine.chat, status.update,
+                                         batch_size=getattr(engine, "trap_batch", distractors.BATCH))
     finally:
         getattr(engine, "close", lambda: None)()
     console.print(f"[green]✓[/] Réponses pièges écrites pour {filled} question(s) sur {missing}.")
@@ -312,6 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ia = IA intégrée, gratuite et hors ligne (défaut ; téléchargée au premier import), "
                         "en-ligne = IA en ligne avec ta clé API gratuite (voir « revise cle »), "
                         "abonnement = ton abonnement Claude, via Claude Code installé sur la machine, simple = sans IA")
+    s.add_argument("--claude-modele", choices=["auto", "opus", "sonnet", "haiku"],
+                   help="modèle utilisé avec --moteur abonnement (défaut : celui choisi dans l'application)")
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")
     s.set_defaults(func=cmd_import)
@@ -331,8 +349,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--oui", action="store_true")
     s.set_defaults(func=cmd_restore)
 
-    s = sub.add_parser("cle", help="enregistrer la clé API de l'IA en ligne")
-    s.add_argument("--fournisseur", choices=["groq", "gemini", "autre"])
+    s = sub.add_parser("cle", help="régler l'IA en ligne : clés API gratuites (une par service), service sans clé")
+    s.add_argument("--fournisseur", choices=["groq", "gemini", "cerebras", "mistral", "openrouter", "sans-cle",
+                                                  "autre"],
+                   help="service à essayer en premier (la clé donnée avec --cle est la sienne)")
+    s.add_argument("--sans-cle", choices=["oui", "non"],
+                   help="utiliser le service gratuit sans clé (Pollinations, lent) quand aucune clé ne marche")
     s.add_argument("--cle", help="la clé API")
     s.add_argument("--modele", help="nom du modèle (défaut : celui conseillé pour le fournisseur)")
     s.add_argument("--url", help="adresse de l'API (fournisseur « autre »)")
@@ -341,6 +363,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("pieges", help="faire écrire par l'IA les mauvaises réponses des QCM (cours déjà importés)")
     s.add_argument("-c", "--cours", nargs="+", metavar="COURS", help="seulement ces cours (défaut : tous)")
     s.add_argument("--moteur", choices=["ia", "en-ligne", "abonnement"], help="défaut : l'IA utilisée pour les imports")
+    s.add_argument("--claude-modele", choices=["auto", "opus", "sonnet", "haiku"],
+                   help="modèle utilisé avec --moteur abonnement (défaut : celui choisi dans l'application)")
     s.set_defaults(func=cmd_traps)
 
     s = sub.add_parser("reviser", aliases=["r"], help="lancer une séance de révision")

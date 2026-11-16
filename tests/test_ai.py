@@ -111,20 +111,22 @@ def test_online_engine(pdf):
 
 
 def test_online_errors(pdf, monkeypatch):
+    config.save({"online_keyless": False})
     with pytest.raises(ReviseError, match="Aucune clé"):
         OnlineEngine(lambda *a: {}).generate(pdf, "Algo", lambda m: None)
+    config.save({"online_provider": "groq"})
     monkeypatch.setenv("REVISE_CLE_API", "x")
 
     def refused(*a):
         raise http_error(401, {"error": {"message": "Invalid API Key"}})
 
-    with pytest.raises(ReviseError, match="Clé API refusée.*Invalid API Key"):
+    with pytest.raises(ReviseError, match="Groq : clé API refusée.*Invalid API Key"):
         OnlineEngine(refused).generate(pdf, "Algo", lambda m: None)
 
     def unknown(*a):
         raise http_error(404, [{"error": {"message": "model not found"}}])
 
-    with pytest.raises(ReviseError, match="Modèle.*model not found"):
+    with pytest.raises(ReviseError, match="modèle.*model not found"):
         OnlineEngine(unknown, get=lambda *a: {"data": []}).generate(pdf, "Algo", lambda m: None)
 
     def down(*a):
@@ -257,8 +259,45 @@ def test_distractors_parse_and_clean():
         {"n": 7, "wrong": ["hors lot"]}, {"n": True, "wrong": ["x"]}, "n'importe quoi"]}) + "\n```"
     found = d.parse(raw, 2)
     assert list(found) == [1]
-    assert d.clean("O(n log n)", found[1]) == ["O(n)", "O(n^2)", "O(1)"]
+    assert d.clean("O(n log n)", found[1][1]) == ["O(n)", "O(n^2)", "O(1)"]
+    assert d.clean("O(n log n)", ["O(n)", "Θ(n log n)"], right="Θ(n log n)") == ["O(n)"]
     assert d.parse("pas du json", 2) == {} and d.parse("[]", 2) == {}
+    # bonne réponse réécrite : gardée si elle est raisonnable, sinon celle du cours
+    assert d.clean_right("Une pile, car LIFO : le dernier entré sort en premier.", " Une pile ") == "Une pile"
+    assert d.clean_right("Une pile", "") == "Une pile" and d.clean_right("Une pile", None) == "Une pile"
+    assert d.clean_right("Une pile", "x" * 200) == "Une pile"
+
+
+def test_traps_balanced_retry():
+    """Bonne réponse bien plus longue que les pièges : les quatre propositions sont redemandées une fois."""
+    from revise.engines import distractors as d
+
+    long_answer = "Une pile, parce que le dernier élément ajouté est toujours le premier à être retiré (LIFO)."
+    assert d.imbalance(long_answer, ["Une file.", "Un arbre.", "Un tas."]) > 1
+    assert d.imbalance("Une pile.", ["Une file.", "Un arbre.", "Un tas."]) < 1
+    calls = []
+
+    def chat(system, user, schema):
+        calls.append((system, user))
+        if len(calls) == 1:   # 1er essai : la bonne réponse dépasse ; la 2e question est équilibrée
+            return json.dumps({"items": [{"n": 1, "right": long_answer, "wrong": ["Une file.", "Un arbre.", "Un tas."]},
+                                         {"n": 2, "right": "O(n)", "wrong": ["O(1)", "O(n²)", "O(log n)"]}]})
+        return json.dumps({"items": [{"n": 1, "right": "Une pile : dernier entré, premier sorti.",
+                                      "wrong": ["Une file : premier entré, premier sorti.",
+                                                "Un arbre : parcouru en largeur d'abord.",
+                                                "Un tas : le plus petit sort en premier."]}]})
+
+    got = d.ask([("qa", "Quelle structure ?", long_answer), ("qa", "Coût ?", "O(n)")], "Algo", chat)
+    assert len(calls) == 2 and "ATTENTION" in calls[1][0] and "Coût" not in calls[1][1]
+    assert "Longueur visée" in calls[1][1]
+    assert got[0][0] == "Une pile : dernier entré, premier sorti." and len(got[0][1]) == 3
+    assert got[1] == ("O(n)", ["O(1)", "O(n²)", "O(log n)"])
+    # deuxième essai pire que le premier (ou en panne) : le premier est gardé
+    calls.clear()
+    got = d.ask([("qa", "Quelle structure ?", long_answer)], "Algo",
+                lambda s, u, sch: (calls.append(1), json.dumps({"items": [{"n": 1, "right": long_answer, "wrong": [
+                    "Une file.", "Un arbre.", "Un tas."]}]}))[1])
+    assert len(calls) == 2 and got[0][0] == long_answer and len(got[0][1]) == 3
 
 
 def test_prepare_fills_only_missing_cards_and_survives_failures(tmp_path):
@@ -269,7 +308,7 @@ def test_prepare_fills_only_missing_cards_and_survives_failures(tmp_path):
     db = Database(tmp_path / "p.db")
     deck = db.add_deck("Algo", "CM1", None, None, "simple",
                        [CardDraft("qa", f"Question {i} ?", f"Réponse {i}", i + 1) for i in range(d.BATCH + 3)]
-                       + [CardDraft("qa", "Déjà prête ?", "Oui", 99, "", ["Non"])])
+                       + [CardDraft("qa", "Déjà prête ?", "Oui", 99, "", ["Non"], "Oui")])
     seen = []
 
     def chat(system, user, schema):
@@ -283,10 +322,15 @@ def test_prepare_fills_only_missing_cards_and_survives_failures(tmp_path):
     cards = db.cards(deck_id=deck)
     assert sum(1 for c in cards if c.distractors) == d.BATCH + 1          # le premier lot est gardé
     assert "Matière : Algo" in seen[0] and "Déjà prête" not in "".join(seen) and schema_ok(d.SCHEMA)
+    assert d.SCHEMA["properties"]["items"]["items"]["required"] == ["n", "right", "wrong"]
     assert d.prepare(db, [deck], lambda s, u, sch: json.dumps({"items": [
         {"n": n, "wrong": ["a", "b", "c"]} for n in range(1, 4)]}), lambda m: None) == 3
-    assert all(c.distractors for c in db.cards(deck_id=deck))
+    assert all(c.distractors and c.quiz_answer for c in db.cards(deck_id=deck))
     assert d.prepare(db, [deck], chat, lambda m: None) == 0 and len(seen) == 2   # plus rien à faire : aucun appel
+    # carte modifiée : ses propositions de QCM sont à refaire
+    first = db.cards(deck_id=deck)[0]
+    db.update_card_content(first.id, "qa", first.question, "Autre réponse", first.page)
+    assert not db.card(first.id).distractors and not db.card(first.id).quiz_answer
     db.close()
 
 
@@ -407,3 +451,115 @@ def test_oversized_visual_chunk_is_sent_page_by_page(tmp_path, monkeypatch):
                                                      "section": ""}]})
     _, cards = prompt.generate_cards(f, "Algo", lambda m: None, chat, "IA", lambda s, u, d: pytest.fail("trop lourd"))
     assert len(asked) == 1 and "=== Page 2 ===" in asked[0] and len(cards) == 1    # la page 1, illisible, est laissée
+
+
+# ------------------------------------------- plusieurs services, service sans clé
+
+def ok_reply(text):
+    return {"choices": [{"message": {"content": text}}]}
+
+
+def test_online_chain_order_and_legacy_settings():
+    assert [c["provider"] for c in online.chain()] == [online.KEYLESS]    # rien de réglé : marche sans clé
+    assert online.describe() == "sans clé : marche, mais lent" and not online.has_key()
+    config.save({"online_provider": "gemini", "online_key": "ancienne"})  # réglages d'avant la 0.8
+    assert online.settings()["key"] == "ancienne" and online.has_key()
+    config.save({"online_keys": {"groq": "g", "mistral": "m", "inconnu": "x", "cerebras": " "}})
+    assert [c["provider"] for c in online.chain()] == ["gemini", "groq", "mistral", online.KEYLESS]
+    assert online.settings("mistral") == {"provider": "mistral", "url": "https://api.mistral.ai/v1",
+                                          "model": "mistral-small-latest", "key": "m"}
+    config.save({"online_keyless": False})
+    assert [c["provider"] for c in online.chain()] == ["gemini", "groq", "mistral"]
+    assert online.describe() == "prête : Google Gemini, Groq, Mistral AI"
+    config.save({"online_provider": online.KEYLESS})
+    assert online.chain()[0]["provider"] == online.KEYLESS                # choisi exprès : essayé en premier
+    assert online.pick_model(["openai/gpt-5", "google/gemma-4-31b-it:free"], "openrouter") == \
+        "google/gemma-4-31b-it:free"                                       # jamais un modèle payant
+
+
+def test_online_switches_service_when_quota_is_exhausted():
+    config.save({"online_provider": "groq", "online_keys": {"groq": "g", "cerebras": "c"}})
+    calls, waits, msgs = [], [], []
+
+    def post(url, headers, payload, timeout):
+        calls.append((url, headers.get("Authorization")))
+        if "groq" in url:
+            raise http_error(429, {"error": {"message": "Rate limit reached on tokens per day (TPD): Limit 100000"}})
+        return ok_reply('{"ok": 1}')
+
+    engine = OnlineEngine(post, waits.append)
+    engine.progress = msgs.append
+    assert engine.chat("s", "u") == '{"ok": 1}' and engine.chat("s", "u") == '{"ok": 1}'
+    assert [u.split("/")[2] for u, _ in calls] == ["api.groq.com", "api.cerebras.ai", "api.cerebras.ai"]
+    assert calls[1][1] == "Bearer c" and waits == []                       # quota du jour : pas d'attente
+    assert any("on passe à Cerebras" in m for m in msgs)
+
+    def all_down(url, headers, payload, timeout):
+        raise http_error(401, {"error": {"message": "bad key"}})
+
+    with pytest.raises(ReviseError, match=r"(?s)Aucun service.*Groq : clé API refusée.*Cerebras : clé API refusée"):
+        OnlineEngine(all_down, waits.append, confs=[online.settings("groq"), online.settings("cerebras")]).chat("s", "u")
+
+
+def test_keyless_service_waits_its_turn():
+    calls, waits = [], []
+    answers = [http_error(402, {"error": {"code": "FREE_LIMIT", "message": "Free limit reached: 1 reply every 45 "
+                                          "seconds per IP. Retry after 32s, or get unlimited replies"}}),
+               ok_reply('{"ok": 1}')]
+
+    def post(url, headers, payload, timeout):
+        calls.append((url, headers, payload))
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    engine = OnlineEngine(post, waits.append)
+    engine.check()
+    assert engine.chat("s", "u") == '{"ok": 1}' and waits == [33.0]
+    url, headers, payload = calls[0]
+    assert url == "https://text.pollinations.ai/openai/chat/completions" and "Authorization" not in headers
+    assert payload["model"] == "openai" and payload["reasoning_effort"] == "low"
+    assert engine.trap_batch == online.KEYLESS_BATCH < OnlineEngine(conf=online.settings("groq")).trap_batch
+
+
+def test_online_lowers_reasoning_when_the_answer_is_cut():
+    seen = []
+
+    def post(url, headers, payload, timeout):
+        seen.append(payload.get("reasoning_effort"))
+        if not payload.get("reasoning_effort"):
+            raise http_error(400, {"error": {"message": "The model exhausted its output token limit before "
+                                                        "producing an answer. Reduce reasoning effort."}})
+        return ok_reply("{}")
+
+    assert OnlineEngine(post, lambda s: None, conf=online.settings("groq") | {"key": "k"}).chat("s", "u") == "{}"
+    assert seen == [None, "low"]
+
+
+def test_online_drops_json_mode_when_the_model_refuses_it():
+    seen = []
+
+    def post(url, headers, payload, timeout):
+        seen.append("response_format" in payload)
+        if payload.get("response_format"):
+            raise http_error(400, {"error": {"message": "response_format json_object is not supported"}})
+        return ok_reply("{}")
+
+    assert OnlineEngine(post, lambda s: None, conf=online.settings(online.KEYLESS)).chat("s", "u") == "{}"
+    assert seen == [True, False]
+
+
+def test_online_choices_match_cli():
+    import argparse
+    parser = cli.build_parser()
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices["cle"]
+    assert next(a for a in sub._actions if a.dest == "fournisseur").choices == list(online.PROVIDERS)
+
+
+def test_cle_command_keeps_one_key_per_service(tmp_path):
+    base = str(tmp_path / "r.db")
+    assert cli.main(["--base", base, "cle", "--fournisseur", "groq", "--cle", "g"]) == 0
+    assert cli.main(["--base", base, "cle", "--fournisseur", "cerebras", "--cle", "c", "--sans-cle", "non"]) == 0
+    assert [c["provider"] for c in online.chain()] == ["cerebras", "groq"]
+    assert online.settings("groq")["key"] == "g"

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QLibraryInfo, QSize, Qt, QTranslator, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
-                               QPushButton, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+                               QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
 from revise import __version__, selfupdate, updates
 from revise.db import Database
@@ -27,6 +27,17 @@ from revise.gui.stats_page import StatsPage
 from revise.gui.update_dialog import UpdateDialog
 
 
+def scrollable(page: QWidget) -> QScrollArea:
+    """Page dans une zone qui défile : une petite fenêtre (ou un écran agrandi à 125-150 % sous Windows)
+    fait défiler la page au lieu d'écraser ses éléments les uns sur les autres."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    area.setWidget(page)
+    return area
+
+
 class MainWindow(QMainWindow):
     COURSES, LEARN, QUIZ, IMPORT, STATS, HOME = range(6)  # index des pages = identifiants des boutons
 
@@ -35,6 +46,10 @@ class MainWindow(QMainWindow):
         self.db = db
         self.setWindowTitle("revise")
         self.resize(1180, 780)
+        screen = QApplication.primaryScreen()
+        if screen is not None:  # jamais plus grande que l'écran (mise à l'échelle de Windows comprise)
+            free = screen.availableGeometry()
+            self.resize(min(1180, free.width() - 40), min(780, free.height() - 60))
 
         root = QWidget()
         h = QHBoxLayout(root)
@@ -67,7 +82,7 @@ class MainWindow(QMainWindow):
         self.review = ReviewPage(db)
         self._review_from = self.COURSES  # page où revenir à la fin d'une séance
         for page in (self.courses, self.learn, self.quiz, self.import_page, self.stats, self.home, self.review):
-            self.stack.addWidget(page)
+            self.stack.addWidget(scrollable(page))  # même index que la page
         # Ordre du menu = ordre dans lequel on s'en sert ; les identifiants restent les index des pages.
         for label, i, icon, tip in (
                 ("Accueil", self.HOME, "home", "Ton programme du jour"),
@@ -126,6 +141,9 @@ class MainWindow(QMainWindow):
         self.home.go_learn.connect(lambda: self.show_page(self.LEARN))
         self.show_page(self.HOME)
 
+    def current_page(self) -> QWidget:
+        return self.stack.currentWidget().widget()
+
     def show_page(self, i: int) -> None:
         self.nav.button(i).setChecked(True)
         self.stack.setCurrentIndex(i)
@@ -163,7 +181,7 @@ class MainWindow(QMainWindow):
         current = self.stack.currentIndex()
         self._review_from = current if current in (self.HOME, self.COURSES) else self.COURSES
         self.sidebar.setEnabled(False)
-        self.stack.setCurrentWidget(self.review)
+        self.stack.setCurrentIndex(self.stack.count() - 1)  # séance de révision, ajoutée en dernier
         self.review.start([int(d) for d in deck_ids], exam, include_known, new_per_day)
 
     def end_review(self) -> None:

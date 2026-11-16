@@ -29,7 +29,7 @@ Quatre moteurs, au choix dans l'onglet **Ajouter un cours** (ou `--moteur`) :
 | Moteur | Coût | Vitesse | Qualité |
 |---|---|---|---|
 | `ia` — IA intégrée (défaut) | gratuit, hors ligne, sans compte | plusieurs minutes par cours | bonne |
-| `en-ligne` — IA en ligne | gratuit avec ta propre clé API (Groq, Gemini…) | quelques secondes | très bonne |
+| `en-ligne` — IA en ligne | gratuit : sans clé (lent), ou avec tes clés API gratuites (Groq, Cerebras, Gemini, Mistral, OpenRouter) | ~15 min par cours sans clé, quelques secondes avec | bonne à très bonne |
 | `abonnement` — ton abonnement Claude | compris dans l'abonnement (Pro, Max…) | quelques minutes par cours | excellente |
 | `simple` — sans IA | gratuit, hors ligne | instantané | moyenne, à retoucher, QCM facile |
 
@@ -38,12 +38,18 @@ modèle : Gemma 3 12B (7,3 Go) si la machine a 16 Go de mémoire ou plus, sinon 
 interrompu reprend où il s'était arrêté. La carte graphique est utilisée s'il y en a une. Tout est rangé dans
 `~/.local/share/revise/ia/` (`~/Library/Application Support/revise/ia/` sur Mac). Pour imposer un modèle : `REVISE_IA_MODELE=4b`, `12b` ou le chemin d'un fichier `.gguf`.
 
-**IA en ligne.** Bouton « Configurer… » de l'onglet Ajouter un cours (ou `revise cle --fournisseur groq --cle …`) : choisis le
-service, colle ta clé gratuite. La clé reste sur ta machine ; le texte du cours est envoyé au service choisi.
+**IA en ligne.** Marche sans rien régler : le service gratuit sans clé de Pollinations écrit les cartes (une réponse
+toutes les 45 s par adresse IP, donc environ un quart d'heure par cours). Pour aller vite, bouton « Configurer… » de
+l'onglet Ajouter un cours : colle une ou plusieurs clés gratuites (Groq, Cerebras, Google Gemini, Mistral, OpenRouter,
+ou tout service compatible OpenAI). Quand le quota gratuit d'un service est épuisé ou qu'une clé est refusée,
+l'application passe au suivant, puis au service sans clé. En ligne de commande :
+`revise cle --fournisseur groq --cle …` (une clé par service, `--sans-cle non` pour couper le service sans clé). Les
+clés restent sur ta machine ; le texte du cours est envoyé au service qui répond.
 
 **Abonnement Claude.** Passe par Claude Code (`claude -p`), qui doit être installé et connecté sur la machine ;
 l'option n'apparaît dans l'application que dans ce cas. Aucune clé à créer ; l'usage compte dans les limites de
-l'abonnement.
+l'abonnement. Le modèle se choisit à côté de l'option (Automatique, Opus, Sonnet, Haiku) ; en ligne de commande :
+`--claude-modele opus`.
 
 **Formats lus** : PDF, PowerPoint (`.pptx`, une diapositive = une page), Word (`.docx`), texte (`.txt`, `.md`).
 Les anciens `.ppt` / `.doc` sont à enregistrer en `.pptx` / `.docx`.
@@ -51,8 +57,10 @@ Les anciens `.ppt` / `.doc` sont à enregistrer en `.pptx` / `.docx`.
 **Pages scannées et schémas** : seul « Mon abonnement Claude » les lit (les pages scannées ou qui portent une
 figure lui sont envoyées en PDF, il les regarde). Les autres IA ne lisent que le texte.
 
-**Réponses pièges des QCM.** Après les cartes, l'IA écrit pour chaque question trois fausses réponses crédibles sur
-le même sujet. Sans elles (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
+**Réponses pièges des QCM.** Après les cartes, l'IA écrit pour chaque question les quatre propositions du QCM : la
+bonne réponse, raccourcie si besoin, et trois fausses réponses crédibles, toutes de la même longueur et de la même
+forme (si l'une se repère à sa longueur, elles sont redemandées une fois). Les cours préparés avant la version 0.8
+n'avaient que les fausses réponses, souvent plus courtes que la bonne : l'onglet QCM propose de les refaire. Sans elles (moteur `simple`, cours importés avant la version 0.4), le QCM emprunte les réponses d'autres
 questions du cours, qui se repèrent vite. Pour un cours déjà importé : bouton « Préparer les réponses pièges » de
 l'onglet QCM, ou `revise pieges` (une seule fois par cours, on peut arrêter et reprendre).
 

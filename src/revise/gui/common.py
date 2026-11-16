@@ -6,9 +6,9 @@ import queue
 import threading
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QComboBox, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout,
-                               QWidget)
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QComboBox, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QLayout, QMessageBox,
+                               QVBoxLayout, QWidget)
 
 from revise.db import Database, deck_label
 
@@ -80,6 +80,83 @@ def row(*widgets, stretch_at: int | None = None, spacing: int = 8) -> QHBoxLayou
         else:
             lay.addLayout(w)
     return lay
+
+
+class FlowLayout(QLayout):
+    """Rangée de boutons qui passe à la ligne quand la fenêtre est trop étroite (au lieu de déborder)."""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 8):
+        super().__init__(parent)
+        self._items = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i: int):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i: int):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._place(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._place(rect, move=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _place(self, rect: QRect, move: bool) -> int:
+        lines: list[list] = [[]]
+        x = rect.x()
+        for item in self._items:
+            if item.isEmpty():  # widget caché
+                continue
+            width = item.sizeHint().width()
+            if lines[-1] and x + width > rect.right() + 1:
+                lines.append([])
+                x = rect.x()
+            lines[-1].append(item)
+            x += width + self._spacing
+        y = rect.y()
+        for line in filter(None, lines):
+            height = max(i.sizeHint().height() for i in line)
+            x = rect.x()
+            for item in line:
+                hint = item.sizeHint()
+                if move:  # centré verticalement sur la ligne
+                    item.setGeometry(QRect(QPoint(x, y + (height - hint.height()) // 2), hint))
+                x += hint.width() + self._spacing
+            y += height + self._spacing
+        return max(0, y - self._spacing - rect.y())
+
+
+def flow(*widgets: QWidget, spacing: int = 8) -> QWidget:
+    """Widgets les uns après les autres, sur plusieurs lignes si la place manque."""
+    box = QWidget()
+    lay = FlowLayout(box, spacing)
+    for w in widgets:
+        lay.addWidget(w)
+    return box
 
 
 def step_header(number: int, title: str) -> QHBoxLayout:

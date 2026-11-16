@@ -25,7 +25,7 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     win.resize(1180, 780)
     win.show()
     qapp.processEvents()
-    assert win.stack.currentWidget() is win.home          # l'application s'ouvre sur le programme du jour
+    assert win.current_page() is win.home          # l'application s'ouvre sur le programme du jour
     win.show_page(win.COURSES)
     page = win.courses
     root = page.tree.topLevelItem(0)
@@ -39,7 +39,7 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     page.exam_btn.click()
     qapp.processEvents()
     rv = win.review
-    assert win.stack.currentWidget() is rv and rv.exam and rv.total == 2
+    assert win.current_page() is rv and rv.exam and rv.total == 2
     assert rv.reveal_btn.isVisible() and not rv.rate_btns[3].isVisible()
     rv.reveal_btn.click()
     assert rv.rate_btns[3].isVisible() and "Bien" in rv.rate_btns[3].text()
@@ -53,7 +53,7 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
         rv.rate_btns[3].click()
     assert rv.card is None and rv.back_btn.isVisible()
     rv.back_btn.click()
-    assert win.stack.currentWidget() is win.courses
+    assert win.current_page() is win.courses
     assert win.courses.tree.topLevelItem(0).child(0).text(4) == "2"   # 2 cartes sues
 
     win.show_page(win.STATS)
@@ -74,7 +74,7 @@ def test_quiz_and_learn_pages(qapp, db, tmp_path):
 
     win.show_page(win.LEARN)
     learn = win.learn
-    assert win.stack.currentWidget() is learn and learn.list.count() == 2
+    assert win.current_page() is learn and learn.list.count() == 2
     assert "Question 0" in learn.view.toPlainText() and not learn.prev_btn.isEnabled()
     learn.next_btn.click()
     assert "Une pile est une structure LIFO." in learn.view.toPlainText() and not learn.next_btn.isEnabled()
@@ -122,7 +122,7 @@ def test_activities_open_on_checked_courses(qapp, db):
     assert page.selected_decks() == [ids[0], ids[2]] and page.quiz_btn.isEnabled()
 
     page.quiz_btn.click()
-    assert win.stack.currentWidget() is win.quiz and win.nav.checkedId() == win.QUIZ
+    assert win.current_page() is win.quiz and win.nav.checkedId() == win.QUIZ
     assert win.quiz.scope.currentText() == "Ma sélection (2 cours)" and win.quiz.scope.currentData() == [ids[0], ids[2]]
     win.quiz.count.setValue(50)
     win.quiz.start_btn.click()
@@ -130,7 +130,7 @@ def test_activities_open_on_checked_courses(qapp, db):
 
     win.show_page(win.COURSES)
     page.learn_btn.click()
-    assert win.stack.currentWidget() is win.learn and win.learn.scope.currentData() == [ids[0], ids[2]]
+    assert win.current_page() is win.learn and win.learn.scope.currentData() == [ids[0], ids[2]]
     assert "Question 0.0" in win.learn.view.toPlainText()
     win.close()
 
@@ -382,3 +382,29 @@ def test_explain_parses_model_output():
     for bad in ("pas du json", "{}", '{"explanation": ""}', '{"explanation": 3}', "[]"):
         with pytest.raises(ReviseError):
             explain("Q", "R", "", "", lambda s, u, sc: bad)
+
+
+def test_online_key_dialog_and_claude_model(qapp, db, monkeypatch):
+    from revise import config
+    from revise.engines import claude_code, online
+    from revise.gui import import_page
+
+    monkeypatch.setattr(import_page, "claude_binary", lambda: "/usr/bin/claude")
+    page = import_page.ImportPage(db)
+    assert page.key_state.text() == "sans clé : marche, mais lent"
+    page.claude_model.setCurrentIndex(page.claude_model.findData("sonnet"))
+    assert config.load()["claude_model"] == "sonnet" and claude_code.ClaudeCodeEngine().model == "sonnet"
+
+    dialog = import_page.KeyDialog(page)
+    assert [dialog.first.itemData(i) for i in range(dialog.first.count())] == [online.KEYLESS]
+    dialog.keys["groq"].setText(" gsk_1 ")
+    dialog.keys["mistral"].setText("m")
+    assert [dialog.first.itemData(i) for i in range(dialog.first.count())] == ["groq", "mistral", online.KEYLESS]
+    dialog.first.setCurrentIndex(dialog.first.findData("mistral"))
+    dialog._save()
+    assert [c["provider"] for c in online.chain()] == ["mistral", "groq", online.KEYLESS]
+    assert online.settings("groq")["key"] == "gsk_1"
+    page._update_key_state()
+    assert page.key_state.text() == "prête : Mistral AI, Groq + sans clé"
+    again = import_page.KeyDialog(page)                     # rouverte : les réglages sont repris
+    assert again.keys["groq"].text() == "gsk_1" and again.first.currentData() == "mistral"

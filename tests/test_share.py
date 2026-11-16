@@ -175,3 +175,17 @@ def test_cli_share_backup_restore(tmp_path, capsys):
     db = Database(other)
     assert [d.subject for d in db.decks()] == ["Algo"] and len(db.cards()) == 3
     db.close()
+
+
+def test_quiz_answer_is_shared(db, tmp_path):
+    deck = db.add_deck("Algo", "CM1", None, None, "abonnement",
+                       [CardDraft("qa", "Pile ?", "Une structure LIFO, car le dernier entré sort en premier.", 1, "",
+                                  ["Une file.", "Un arbre.", "Un tas."], "Une structure LIFO.")])
+    out = tmp_path / "algo.revise"
+    share.export_courses(db, [deck], out)
+    assert json.loads(out.read_text())["version"] == share.FORMAT_VERSION == 2
+    other = Database(tmp_path / "autre.db")
+    [got] = share.import_file(other, out)
+    [card] = other.cards(deck_id=got.deck_id)
+    assert card.quiz_answer == "Une structure LIFO." and card.distractors == ["Une file.", "Un arbre.", "Un tas."]
+    other.close()

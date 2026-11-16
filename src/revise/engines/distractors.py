@@ -11,32 +11,54 @@ from collections.abc import Callable
 
 from revise.engines import Progress
 from revise.models import CardDraft, ReviseError
+from revise.quiz import is_prepared
 
 BATCH = 10            # questions par appel à l'IA
 WANTED = 3            # mauvaises réponses par question
 MAX_ANSWER_CHARS = 700
 
-SYSTEM = """Tu fabriques les mauvaises réponses d'un QCM de révision pour un étudiant.
-Pour chaque question numérotée, on te donne la bonne réponse. Écris exactement 3 mauvaises réponses.
+SYSTEM = """Tu fabriques les quatre propositions d'un QCM de révision pour un étudiant.
+Pour chaque question numérotée, on te donne la réponse du cours. Écris :
+- "right" : la bonne réponse telle qu'elle sera proposée dans le QCM. Garde exactement son sens, \
+mais enlève ce qui la ferait repérer : explications, exemples, justifications et précisions en \
+plus. Si elle est déjà courte, recopie-la telle quelle. Ne la rends jamais fausse ni incomplète \
+sur l'essentiel.
+- "wrong" : exactement 3 mauvaises réponses.
 
-Règles :
+Règle la plus importante : en voyant les quatre propositions (right + les 3 wrong), personne ne \
+doit pouvoir deviner la bonne à sa forme. Elles ont :
+- la même longueur, à 20 % près (compte les mots) ;
+- la même structure (phrase, liste, formule, code, date, nom propre…) et le même début de phrase \
+quand c'est possible ;
+- le même niveau de détail et de vocabulaire technique. Si "right" contient une justification \
+(« car… », « parce que… ») ou une condition, chaque mauvaise réponse en contient une aussi, \
+fausse mais crédible. La bonne ne doit être ni la plus longue, ni la plus précise, ni la seule \
+nuancée.
+
+Autres règles :
 - Chaque mauvaise réponse répond à LA MÊME question, sur le même sujet, avec le vocabulaire du \
 cours : quelqu'un qui n'a pas appris le cours doit hésiter entre les quatre propositions.
 - Chaque mauvaise réponse est FAUSSE sans discussion pour quelqu'un qui connaît le cours. Jamais \
 une reformulation de la bonne réponse, jamais une réponse à moitié juste.
-- Même forme que la bonne réponse : à peu près la même longueur, le même niveau de détail, le \
-même style (phrase, liste, formule, code, date, nom propre…). La bonne réponse ne doit pas se \
-repérer parce qu'elle est plus longue ou plus précise que les autres.
 - Appuie-toi sur les confusions classiques : notion voisine, propriété inversée, valeur proche, \
 cause et conséquence échangées, mauvais auteur ou mauvaise date, condition oubliée ou ajoutée.
-- Texte à trous (question contenant [...]) : donne 3 autres mots ou expressions qui s'insèrent \
-correctement dans la phrase, du même domaine que la bonne réponse.
+- Texte à trous (question contenant [...]) : "right" est seulement le ou les mots qui manquent ; \
+donne 3 autres mots ou expressions qui s'insèrent correctement dans la phrase, du même domaine.
+- Question (code) : recopie la bonne réponse sans la changer dans "right" ; les mauvaises sont du \
+code de même taille, presque juste mais faux.
 - Si la bonne réponse commence par « Oui » ou « Non », une mauvaise réponse au moins commence \
 par l'inverse.
-- Interdits : « toutes les réponses », « aucune de ces réponses », les blagues, les explications.
+- Interdits : « toutes les réponses », « aucune de ces réponses », les blagues.
 - Écris dans la langue de la question, avec le même Markdown que la bonne réponse.
 - Réponds uniquement avec un objet JSON, sans texte autour, de la forme :
-{"items": [{"n": 1, "wrong": ["…", "…", "…"]}, {"n": 2, "wrong": ["…", "…", "…"]}]}"""
+{"items": [{"n": 1, "right": "…", "wrong": ["…", "…", "…"]}, {"n": 2, "right": "…", "wrong": ["…", "…", "…"]}]}"""
+
+# Deuxième essai, pour les questions dont les propositions n'avaient pas la même longueur.
+RETRY = """
+
+ATTENTION : à ton premier essai, la bonne réponse se repérait à sa longueur. Pour chaque question, \
+on t'indique la longueur visée : "right" ET chacune des 3 mauvaises réponses doivent la respecter \
+(raccourcis la bonne, ou allonge les mauvaises avec des détails faux mais crédibles)."""
 
 SCHEMA = {
     "type": "object",
@@ -47,9 +69,10 @@ SCHEMA = {
                 "type": "object",
                 "properties": {
                     "n": {"type": "integer"},
+                    "right": {"type": "string"},
                     "wrong": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["n", "wrong"],
+                "required": ["n", "right", "wrong"],
                 "additionalProperties": False,
             },
         },
@@ -69,9 +92,9 @@ def _norm(s: str) -> str:
     return " ".join(re.sub(r"[`*_.,;:!?«»\"'’()]", " ", s.lower()).split())
 
 
-def clean(answer: str, wrong: list) -> list[str]:
+def clean(answer: str, wrong: list, right: str = "") -> list[str]:
     """Mauvaises réponses utilisables : non vides, différentes de la bonne et entre elles."""
-    seen = {_norm(answer)}
+    seen = {_norm(answer), _norm(right)} - {""}
     out: list[str] = []
     for w in wrong:
         if not isinstance(w, str):
@@ -85,8 +108,25 @@ def clean(answer: str, wrong: list) -> list[str]:
     return out[:WANTED]
 
 
-def parse(raw: str, count: int) -> dict[int, list]:
-    """Réponse du modèle -> {numéro de question (à partir de 1) : mauvaises réponses}."""
+def clean_right(answer: str, right) -> str:
+    """Bonne réponse réécrite par l'IA, ou celle du cours si la réécriture est vide ou suspecte."""
+    if not isinstance(right, str) or not right.strip() or _BANNED.search(right):
+        return answer.strip()
+    right = right.strip()
+    return right if len(right) <= len(answer.strip()) * 1.3 + 40 else answer.strip()
+
+
+def imbalance(right: str, wrong: list[str]) -> float:
+    """0 si la bonne réponse a la longueur des mauvaises ; au-delà de 1, elle se repère à sa longueur."""
+    if not wrong:
+        return 0.0
+    mean = sum(len(w) for w in wrong) / len(wrong)
+    gap = abs(len(right) - mean)
+    return gap / max(25.0, 0.35 * max(len(right), mean))
+
+
+def parse(raw: str, count: int) -> dict[int, tuple]:
+    """Réponse du modèle -> {numéro de question (à partir de 1) : (bonne réponse réécrite, mauvaises réponses)}."""
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.strip("`").removeprefix("json").strip()
@@ -95,58 +135,87 @@ def parse(raw: str, count: int) -> dict[int, list]:
     except json.JSONDecodeError:
         return {}
     items = data.get("items") if isinstance(data, dict) else None
-    out: dict[int, list] = {}
+    out: dict[int, tuple] = {}
     for it in items if isinstance(items, list) else []:
         if isinstance(it, dict) and isinstance(it.get("n"), int) and not isinstance(it["n"], bool) \
                 and 1 <= it["n"] <= count and isinstance(it.get("wrong"), list):
-            out.setdefault(it["n"], it["wrong"])
+            out.setdefault(it["n"], (it.get("right"), it["wrong"]))
     return out
 
 
-def ask(items: list[tuple[str, str, str]], subject: str, chat: SchemaChat) -> list[list[str]]:
-    """Mauvaises réponses pour un lot de (type, question, bonne réponse). Liste vide si l'IA n'a rien
-    donné d'utilisable pour une question."""
+def _request(items: list[tuple[str, str, str]], subject: str, chat: SchemaChat,
+             targets: list[int] | None = None) -> list[tuple[str, list[str]]]:
     parts = [f"Matière : {subject}."]
     for n, (kind, question, answer) in enumerate(items, start=1):
         label = " (texte à trous)" if kind == "cloze" else " (code)" if kind == "code" else ""
+        target = f"\n\nLongueur visée pour chaque proposition : environ {targets[n - 1]} caractères." \
+            if targets else ""
         parts.append(f"### Question {n}{label}\n{question.strip()}\n\nBonne réponse :\n"
-                     f"{answer.strip()[:MAX_ANSWER_CHARS]}")
-    found = parse(chat(SYSTEM, "\n\n".join(parts), SCHEMA), len(items))
-    return [clean(answer, found.get(n, [])) for n, (_, _, answer) in enumerate(items, start=1)]
+                     f"{answer.strip()[:MAX_ANSWER_CHARS]}{target}")
+    found = parse(chat(SYSTEM + (RETRY if targets else ""), "\n\n".join(parts), SCHEMA), len(items))
+    out = []
+    for n, (kind, _, answer) in enumerate(items, start=1):
+        raw_right, raw_wrong = found.get(n, (None, []))
+        right = answer.strip() if kind == "code" else clean_right(answer, raw_right)
+        out.append((right, clean(answer, raw_wrong, right)))
+    return out
 
 
-def add_to_drafts(cards: list[CardDraft], subject: str, chat: SchemaChat, progress: Progress, label: str) -> None:
+def ask(items: list[tuple[str, str, str]], subject: str, chat: SchemaChat) -> list[tuple[str, list[str]]]:
+    """Propositions de QCM pour un lot de (type, question, bonne réponse) : [(bonne réponse réécrite,
+    mauvaises réponses)]. Liste de mauvaises réponses vide si l'IA n'a rien donné d'utilisable.
+    Les questions dont la bonne réponse se repère à sa longueur sont redemandées une fois."""
+    got = _request(items, subject, chat)
+    redo = [i for i, (right, wrong) in enumerate(got) if items[i][0] != "code" and imbalance(right, wrong) > 1]
+    if redo:
+        try:
+            targets = [max(len(got[i][0]), 1) if not got[i][1] else
+                       round((len(got[i][0]) + sum(len(w) for w in got[i][1]) / len(got[i][1])) / 2)
+                       for i in redo]
+            again = _request([items[i] for i in redo], subject, chat, targets)
+        except ReviseError:
+            again = []
+        for i, (right, wrong) in zip(redo, again):
+            if len(wrong) >= len(got[i][1]) and imbalance(right, wrong) < imbalance(*got[i]):
+                got[i] = (right, wrong)
+    return got
+
+
+def add_to_drafts(cards: list[CardDraft], subject: str, chat: SchemaChat, progress: Progress, label: str,
+                  batch_size: int = BATCH) -> None:
     """Complète les cartes d'un import. Une panne de l'IA ici ne fait pas perdre les cartes :
     celles qui restent sans mauvaises réponses pourront être préparées plus tard depuis l'onglet QCM."""
-    for start in range(0, len(cards), BATCH):
-        batch = cards[start:start + BATCH]
-        progress(f"{label} : réponses pièges du QCM — {min(start + BATCH, len(cards))}/{len(cards)}")
+    for start in range(0, len(cards), batch_size):
+        batch = cards[start:start + batch_size]
+        progress(f"{label} : réponses pièges du QCM — {min(start + batch_size, len(cards))}/{len(cards)}")
         try:
-            wrong = ask([(c.kind, c.question, c.answer) for c in batch], subject, chat)
+            got = ask([(c.kind, c.question, c.answer) for c in batch], subject, chat)
         except ReviseError:
             return
-        for c, w in zip(batch, wrong):
-            c.distractors = w
+        for c, (right, wrong) in zip(batch, got):
+            if wrong:
+                c.distractors, c.quiz_answer = wrong, right
 
 
 def prepare(db, deck_ids: list[int], chat: SchemaChat, progress: Progress,
-            should_stop: Callable[[], bool] = lambda: False) -> int:
-    """Prépare les mauvaises réponses des cartes déjà enregistrées qui n'en ont pas.
-    Chaque lot est enregistré aussitôt : on peut arrêter et reprendre. Retourne le nombre de cartes complétées."""
-    todo = [c for c in db.cards(deck_ids=deck_ids, include_suspended=False) if not c.distractors]
+            should_stop: Callable[[], bool] = lambda: False, batch_size: int = BATCH) -> int:
+    """Prépare les propositions de QCM des cartes qui n'en ont pas, ou qui n'ont que d'anciennes mauvaises réponses
+    (d'avant la version 0.8, souvent plus courtes que la bonne). Chaque lot est enregistré aussitôt : on peut
+    arrêter et reprendre. Retourne le nombre de cartes complétées."""
+    todo = [c for c in db.cards(deck_ids=deck_ids, include_suspended=False) if not is_prepared(c)]
     subjects = {d.id: d.subject for d in db.decks()}
     done = filled = 0
     for deck_id in dict.fromkeys(c.deck_id for c in todo):
         cards = [c for c in todo if c.deck_id == deck_id]
-        for start in range(0, len(cards), BATCH):
+        for start in range(0, len(cards), batch_size):
             if should_stop():
                 return filled
-            batch = cards[start:start + BATCH]
+            batch = cards[start:start + batch_size]
             progress(f"Préparation des réponses pièges : {done}/{len(todo)} questions")
-            wrong = ask([(c.kind, c.question, c.answer) for c in batch], subjects.get(deck_id, ""), chat)
-            for c, w in zip(batch, wrong):
-                if w:
-                    db.set_distractors(c.id, w)
+            got = ask([(c.kind, c.question, c.answer) for c in batch], subjects.get(deck_id, ""), chat)
+            for c, (right, wrong) in zip(batch, got):
+                if wrong:
+                    db.set_distractors(c.id, wrong, right)
                     filled += 1
             done += len(batch)
     return filled
@@ -161,7 +230,7 @@ def default_engine_name() -> str:
     wanted = config.load().get("engine")
     if wanted == "abonnement":
         return wanted
-    return "en-ligne" if wanted == "en-ligne" or (wanted != "ia" and online.settings()["key"]) else "ia"
+    return "en-ligne" if wanted == "en-ligne" or (wanted != "ia" and online.has_key()) else "ia"
 
 
 def default_engine():
