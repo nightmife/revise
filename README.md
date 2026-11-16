@@ -64,9 +64,15 @@ revise raccourci    # ajoute « revise » au menu des applications
 ```
 
 Dans l'application :
+- **Accueil** : l'application s'ouvre sur le programme du jour (cartes à revoir, nouvelles cartes, durée estimée)
+  avec un seul bouton « Commencer ma révision ». En dessous : série de jours, part des cartes sues, prochain
+  examen, et des raccourcis (QCM rapide, fiche, choisir mes cours, ajouter un cours). À la première visite, elle
+  montre le mode d'emploi en trois étapes.
+- **Comment ça marche ?** (en bas à gauche, ou touche `F1`) : le mode d'emploi en une page et les raccourcis clavier.
 - **Ajouter un cours** : glisse des PDF (ou « Choisir des PDF… »), choisis qui écrit les cartes, « Créer les cartes ».
 - **Mes cours** : coche un ou plusieurs cours (un clic sur la ligne), puis choisis une activité :
-  - **Réviser** : planning de répétition espacée (cartes à revoir + nouvelles du jour) ;
+  - **Réviser** : planning de répétition espacée (cartes à revoir, puis nouvelles du jour). Les cartes sont
+    posées dans un ordre aléatoire et tirées au hasard dans tous les cours cochés ;
   - **Tout revoir** : toutes les cartes tout de suite, dans un ordre aléatoire, jusqu'à les savoir toutes ; les cartes
     déjà connues sont sautées (on peut quitter et reprendre) ;
   - **Lire la fiche** : le cours partie par partie, réponses visibles ;

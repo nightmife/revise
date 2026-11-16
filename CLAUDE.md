@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (157), GUI en offscreen
+.venv/bin/pytest -q                              # tests (160), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -38,13 +38,16 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `engines/explain.py` | « Explique-moi » : `explain(question, réponse, …, chat)` |
 | `engines/claude_code.py` | moteur `abonnement` : `claude -p` (abonnement Claude de l'utilisateur, sans outils, sortie JSON) ; `chat_pdf` joint les pages à regarder en PDF dans le message (stream-json), seul moteur à lire scans et schémas ; proposé dans l'interface seulement si `claude_binary()` trouve Claude Code |
 | `engines/simple.py` | moteur `simple` : règles sans IA |
-| `scheduler.py` | FSRS, `Session` (file de révision ; `cram=True` = mode examen, ordre aléatoire) |
+| `scheduler.py` | FSRS, `Session` (file de révision ; ordre aléatoire dans les deux modes : `rng`, rang tiré par carte dans `order` ; mode normal = cartes à revoir d'abord, puis nouvelles tirées au hasard dans tous les cours choisis ; `cram=True` = mode examen) |
+| `today.py` | programme du jour : `today()` → `Today` (à revoir, nouvelles, faites, série, maîtrise, prochain examen), `mastery` (cartes sues par cours), `exam_plan` / `new_per_day_for` (rythme relevé si un examen approche) |
 | `quiz.py` | QCM : `build_quiz` ; mauvaises réponses = `Card.distractors` (IA), sinon réponses des cartes les plus ressemblantes |
 | `stats.py`, `editfmt.py`, `tui.py`, `cli.py` | stats, édition Markdown, révision en terminal (Textual), commandes |
-| `gui/app.py` | `MainWindow` : barre latérale + `QStackedWidget` ; index `COURSES, LEARN, QUIZ, IMPORT, STATS` (l'ordre du menu est différent) ; `open_with` ouvre fiche/QCM sur les cours cochés |
+| `gui/app.py` | `MainWindow` : barre latérale (icônes `theme.nav_icon`) + `QStackedWidget` ; index `COURSES, LEARN, QUIZ, IMPORT, STATS, HOME` (l'ordre du menu est différent) ; s'ouvre sur `HOME` ; `open_with` ouvre fiche/QCM sur les cours cochés, `quick_quiz` lance un QCM de 10 questions ; une séance revient à la page d'où elle est partie (`_review_from`) |
+| `gui/home_page.py` | accueil « Aujourd'hui » : anneau d'avancement (`Ring`), bouton principal selon l'état du jour, tuiles (série, maîtrise, examen), raccourcis ; mode d'emploi en 3 étapes s'il n'y a aucun cours |
+| `gui/help_dialog.py` | « Comment ça marche ? » (F1) : mode d'emploi et raccourcis clavier |
 | `gui/backup_dialog.py`, `gui/update_dialog.py` | fenêtres « Sauvegarde » et « Mise à jour » (boutons en bas de la barre latérale) |
 | `gui/render.py` | `show_markdown(view, texte)` : à utiliser pour tout texte de carte (formules + code coloré par pygments) |
-| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`), `theme.py` (couleurs, QSS, icône dessinée) |
+| `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`, `step_header` pour les étapes numérotées, `Background`), `theme.py` (couleurs, QSS, icônes dessinées) ; `courses.py` dessine la colonne « Maîtrise » avec `MasteryBar` |
 | `packaging/revise_gui.py` | point d'entrée des exécutables ; `make_icon.py` ; `INSTALLATION.md` = notes de la Release ; `.github/workflows/release.yml` : tests, PyInstaller (exe Windows, .dmg Mac arm64 + Intel), Release |
 
 ## Conventions
@@ -56,6 +59,8 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - Erreurs utilisateur : lever `ReviseError` avec un message en français.
 - Les tests n'utilisent ni le réseau ni les réglages réels (fixture `isolated_settings` dans `tests/conftest.py`) ; les moteurs IA reçoivent de faux `chat`/`post`/`opener`.
 - Le QCM et « Apprendre » ne modifient jamais le planning FSRS.
+- Un test ne doit jamais dépendre de l'ordre des cartes d'une séance (aléatoire) : passer `rng=random.Random(graine)` à `Session`, ou raisonner sur la carte affichée.
+- Le nombre de nouvelles cartes par jour est un réglage mémorisé (`new_per_day` dans la config), lu par l'accueil et par « Mes cours ».
 - La vérification des mises à jour part de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
 - `generate_cards(…, chat_pdf=None)` : un moteur qui sait regarder un PDF passe son `chat_pdf` ; les autres ne reçoivent que du texte.
 - Le build (`release.yml`) essaie pour de vrai la mise à jour automatique : `revise --install-from <fichier>` puis `--selftest` et `--cleanup-update`.
@@ -74,5 +79,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
   téléchargement vérifié a été essayé ici ; la relance (`relaunch`) et le parcours complet depuis la fenêtre
   n'ont jamais tourné sur un vrai Windows ou Mac.
 - Lecture des scans/schémas et « Explique-moi » : essayés pour de vrai avec le moteur `abonnement` seulement.
+- Refonte de l'interface (0.7.0) : contrôlée sur captures hors écran seulement ; les pages QCM, Mes progrès, fin de
+  séance et la fenêtre d'aide n'ont pas été retouchées après relecture (réglages du QCM peu guidés, « 0 min » en fin
+  de séance courte, noms de mois qui se chevauchent dans « Régularité », page « Ajouter un cours » tassée dans une
+  petite fenêtre).
 - Les noms de modèles par défaut de `online.PROVIDERS` peuvent être périmés : si le service refuse le modèle,
   `OnlineEngine._replace_model` en choisit un dans la liste du service (`pick_model`) et l'enregistre.
