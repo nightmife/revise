@@ -83,6 +83,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - La vérification des mises à jour part de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
 - `generate_cards(…, chat_pdf=None)` : un moteur qui sait regarder un PDF passe son `chat_pdf` ; les autres ne reçoivent que du texte.
 - Le build (`release.yml`) essaie pour de vrai la mise à jour automatique : `revise --install-from <fichier>` puis `--selftest` et `--cleanup-update`.
+- Build Mac puce Apple sur `macos-15` : `macos-latest` restait en file d'attente sans machine, `macos-14` est retiré
+  par GitHub. Un build relancé après publication fait échouer le job `publication` (la Release existe) : ajouter le
+  fichier à la main avec `gh release upload vX.Y.Z <fichier>` (l'empreinte sha256 est publiée quand même).
 - Travail en arrière-plan dans l'interface : `common.Background` (file de messages vidée par une minuterie). Ne jamais émettre un signal Qt ni toucher un widget depuis un `threading.Thread` : plantage aléatoire à la fermeture (vu sur Windows et Mac).
 - Un fichier `.revise` vient d'un inconnu : ne jamais lui faire confiance (types, tailles) ; changer le format = incrémenter `share.FORMAT_VERSION`.
 - Tout doit marcher sous Windows et macOS (pas de chemin ou de commande propre à Linux hors `cli.cmd_shortcut`).
@@ -91,8 +94,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 
 ## Non vérifié
 
-- 0.9 : l'image des pages (`pypdfium2` 5.x) a tourné ici (PDF de cours, fenêtre hors écran) ; son empaquetage
-  PyInstaller (`--collect-all pypdfium2`) n'a jamais tourné. Le thème « automatique » suit `styleHints().colorScheme()`
+- 0.9 : l'image des pages (`pypdfium2` 5.x) a tourné ici (PDF de cours, fenêtre hors écran) ; les exécutables
+  (`--collect-all pypdfium2`) se construisent et démarrent sur les 3 builds, mais l'affichage d'une page n'y a jamais
+  été essayé (le `--selftest` n'en affiche pas). Le thème « automatique » suit `styleHints().colorScheme()`
   (non essayé sur un vrai Windows/Mac). La reprise d'import et le nettoyage des pages n'ont tourné qu'avec de faux
   `chat` et avec le moteur sans IA sur de vrais cours.
 
