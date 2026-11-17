@@ -60,7 +60,7 @@ jobs:
       fail-fast: false   # un Mac Intel en panne n'empêche pas de publier la version puce Apple
       matrix:
         include:
-          - runner: macos-14          # puce Apple (M1 et suivantes) ; macos-latest restait sans machine
+          - runner: macos-15          # puce Apple (M1 et suivantes) ; macos-14 retiré par GitHub
             arch: arm64
           - runner: macos-15-intel    # Mac Intel (avant 2020)
             arch: intel
