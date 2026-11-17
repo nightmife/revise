@@ -102,9 +102,9 @@ class Tile(QFrame):
             lay.addWidget(w)
         lay.addStretch(1)
 
-    def set(self, value: str, detail: str, color: str = theme.TEXT, percent: int | None = None) -> None:
+    def set(self, value: str, detail: str, color: str | None = None, percent: int | None = None) -> None:
         self.value.setText(value)
-        self.value.setStyleSheet(f"color: {color};")
+        self.value.setStyleSheet(f"color: {color or theme.TEXT};")
         self.detail.setText(detail)
         self.bar.setVisible(percent is not None)
         if percent is not None:
@@ -138,6 +138,8 @@ class HomePage(QWidget):
     go_import = Signal()
     go_courses = Signal()
     go_learn = Signal()
+    go_exam = Signal()
+    start_weak = Signal(list)  # identifiants des cartes à retravailler
 
     def __init__(self, db: Database):
         super().__init__()
@@ -226,14 +228,19 @@ class HomePage(QWidget):
         self.courses_card.clicked.connect(self.go_courses.emit)
         self.import_card = ActionCard("Ajouter un cours", "PDF, PowerPoint, Word : l'application écrit les cartes.")
         self.import_card.clicked.connect(self.go_import.emit)
+        self.weak_card = ActionCard("Mes points faibles", "Les questions que tu rates souvent, à retravailler.")
+        self.weak_card.clicked.connect(self._weak)
+        self.exam_card = ActionCard("Examen blanc", "QCM et réponses à écrire, chronométré, noté sur 20.")
+        self.exam_card.clicked.connect(self.go_exam.emit)
         self.more = QWidget()
         grid = QGridLayout(self.more)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(14)
-        for i, card in enumerate((self.quiz_card, self.learn_card, self.courses_card, self.import_card)):
+        for i, card in enumerate((self.quiz_card, self.exam_card, self.weak_card, self.learn_card, self.courses_card,
+                                  self.import_card)):
             card.setMinimumHeight(84)
-            grid.addWidget(card, 0, i)
-            grid.setColumnStretch(i, 1)
+            grid.addWidget(card, i // 3, i % 3)
+            grid.setColumnStretch(i % 3, 1)
         lay.addWidget(self.more)
 
         # ----------------------------------------------------- première visite : le mode d'emploi
@@ -313,6 +320,11 @@ class HomePage(QWidget):
                           theme.BAD if days <= 2 else theme.ACCENT_HOVER)
         else:
             self.exam.set("—", "Donne la date d'un examen dans « Mes cours » : l'application règle le rythme.")
+        from revise.weak import weak_cards
+        weak = len(weak_cards(self.db)) if has else 0
+        self.weak_card.setEnabled(weak > 0)
+        self.weak_card.text.setText(f"{plural(weak, 'question')} que tu rates souvent : retravaille-les." if weak
+                                    else "Rien pour l'instant : les questions que tu rates souvent viendront ici.")
 
     # ------------------------------------------------------------------ actions
     def _main_action(self) -> None:
@@ -327,3 +339,9 @@ class HomePage(QWidget):
 
     def _second_action(self) -> None:
         self.go_courses.emit()
+
+    def _weak(self) -> None:
+        from revise.weak import weak_cards
+        cards = [w.card.id for w in weak_cards(self.db)]
+        if cards:
+            self.start_weak.emit(cards)

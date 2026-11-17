@@ -10,12 +10,13 @@ from PySide6.QtGui import QDesktopServices, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
                                QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 
-from revise import __version__, selfupdate, updates
+from revise import __version__, config, selfupdate, updates
 from revise.db import Database
 from revise.gui import theme
 from revise.gui.backup_dialog import BackupDialog
 from revise.gui.cards_dialog import CardsDialog
 from revise.gui.common import Background, confirm
+from revise.gui.exam_page import ExamPage
 from revise.gui.help_dialog import HelpDialog
 from revise.gui.home_page import HomePage
 from revise.gui.courses import CoursesPage
@@ -39,7 +40,7 @@ def scrollable(page: QWidget) -> QScrollArea:
 
 
 class MainWindow(QMainWindow):
-    COURSES, LEARN, QUIZ, IMPORT, STATS, HOME = range(6)  # index des pages = identifiants des boutons
+    COURSES, LEARN, QUIZ, IMPORT, STATS, HOME, EXAM = range(7)  # index des pages = identifiants des boutons
 
     def __init__(self, db: Database):
         super().__init__()
@@ -79,9 +80,11 @@ class MainWindow(QMainWindow):
         self.import_page = ImportPage(db)
         self.stats = StatsPage(db)
         self.home = HomePage(db)
+        self.exam = ExamPage(db)
         self.review = ReviewPage(db)
         self._review_from = self.COURSES  # page où revenir à la fin d'une séance
-        for page in (self.courses, self.learn, self.quiz, self.import_page, self.stats, self.home, self.review):
+        for page in (self.courses, self.learn, self.quiz, self.import_page, self.stats, self.home, self.exam,
+                     self.review):
             self.stack.addWidget(scrollable(page))  # même index que la page
         # Ordre du menu = ordre dans lequel on s'en sert ; les identifiants restent les index des pages.
         for label, i, icon, tip in (
@@ -90,11 +93,13 @@ class MainWindow(QMainWindow):
                 ("Ajouter un cours", self.IMPORT, "add", "Transformer un PDF, un PowerPoint ou un Word en cartes"),
                 ("Fiches", self.LEARN, "learn", "Lire le cours résumé, réponses visibles"),
                 ("QCM", self.QUIZ, "quiz", "Se tester avec quatre propositions"),
+                ("Examen blanc", self.EXAM, "exam", "QCM et réponses à écrire, chronométré, noté sur 20"),
                 ("Mes progrès", self.STATS, "stats", "Ta régularité et ce qui t'attend")):
             b = QPushButton("  " + label)
             b.setObjectName("nav")
             b.setCheckable(True)
             b.setIcon(theme.nav_icon(icon))
+            b.setProperty("icon_name", icon)
             b.setIconSize(QSize(20, 20))
             b.setToolTip(tip)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -112,6 +117,11 @@ class MainWindow(QMainWindow):
         self.backup_btn.setObjectName("side")
         self.backup_btn.setToolTip("Mettre tes cours et ta progression à l'abri dans un fichier, ou les récupérer.")
         self.backup_btn.clicked.connect(self.open_backup)
+        self.theme_btn = QPushButton()
+        self.theme_btn.setObjectName("side")
+        self.theme_btn.setToolTip("Change l'apparence : sombre, clair, ou comme le système.")
+        self.theme_btn.clicked.connect(self.next_theme)
+        self._theme_label()
         self.help_btn = QPushButton("Comment ça marche ?")
         self.help_btn.setObjectName("side")
         self.help_btn.setToolTip("Le mode d'emploi en une page, et les raccourcis clavier (touche F1).")
@@ -119,6 +129,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("F1"), self, activated=self.open_help)
         sl.addWidget(self.help_btn)
         sl.addWidget(self.backup_btn)
+        sl.addWidget(self.theme_btn)
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("tagline")
         sl.addWidget(ver)
@@ -139,6 +150,10 @@ class MainWindow(QMainWindow):
         self.home.go_import.connect(lambda: self.show_page(self.IMPORT))
         self.home.go_courses.connect(lambda: self.show_page(self.COURSES))
         self.home.go_learn.connect(lambda: self.show_page(self.LEARN))
+        self.home.go_exam.connect(lambda: self.show_page(self.EXAM))
+        self.home.start_weak.connect(self.start_weak)
+        self.stats.start_weak.connect(self.start_weak)
+        self.courses.open_exam.connect(lambda ids: self.open_with(self.EXAM, ids))
         self.show_page(self.HOME)
 
     def current_page(self) -> QWidget:
@@ -160,10 +175,12 @@ class MainWindow(QMainWindow):
             self.import_page.refresh_subjects()
         elif i == self.STATS:
             self.stats.refresh()
+        elif i == self.EXAM:
+            self.exam.refresh()
 
     def open_with(self, i: int, deck_ids: list) -> None:
         """Ouvre « Lire la fiche » ou « QCM » sur les cours cochés dans « Mes cours »."""
-        page = self.learn if i == self.LEARN else self.quiz
+        page = {self.LEARN: self.learn, self.QUIZ: self.quiz, self.EXAM: self.exam}[i]
         page.set_scope([int(d) for d in deck_ids])
         self.nav.button(i).setChecked(True)
         self.stack.setCurrentIndex(i)
@@ -177,12 +194,41 @@ class MainWindow(QMainWindow):
     def open_help(self) -> None:
         HelpDialog(self).exec()
 
-    def start_review(self, deck_ids: list, exam: bool, include_known: bool, new_per_day: int) -> None:
+    def start_review(self, deck_ids: list, exam: bool, include_known: bool, new_per_day: int,
+                     card_ids: list | None = None) -> None:
         current = self.stack.currentIndex()
-        self._review_from = current if current in (self.HOME, self.COURSES) else self.COURSES
+        self._review_from = current if current in (self.HOME, self.COURSES, self.STATS) else self.COURSES
         self.sidebar.setEnabled(False)
         self.stack.setCurrentIndex(self.stack.count() - 1)  # séance de révision, ajoutée en dernier
-        self.review.start([int(d) for d in deck_ids], exam, include_known, new_per_day)
+        self.review.start([int(d) for d in deck_ids], exam, include_known, new_per_day,
+                          [int(c) for c in card_ids] if card_ids is not None else None)
+
+    def start_weak(self, card_ids: list) -> None:
+        """Séance « Tout revoir » limitée aux points faibles : chacune jusqu'à être notée Bien ou Facile."""
+        if card_ids:
+            self.start_review([d.id for d in self.db.decks()], True, True, 0, card_ids)
+
+    # ---------------------------------------------------------------- thème
+    def _theme_label(self) -> None:
+        mode = config.load().get("theme", "sombre")
+        mode = mode if mode in theme.MODES else "sombre"
+        self.theme_btn.setText(f"Apparence : {mode}")
+
+    def next_theme(self) -> None:
+        mode = config.load().get("theme", "sombre")
+        modes = theme.MODES
+        mode = modes[(modes.index(mode) + 1) % len(modes)] if mode in modes else modes[1]
+        config.save({"theme": mode})
+        self.apply_theme(mode)
+
+    def apply_theme(self, mode: str) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.apply(theme.resolve(mode)))
+        for b in self.nav.buttons():
+            b.setIcon(theme.nav_icon(b.property("icon_name")))
+        self._theme_label()
+        self.show_page(self.nav.checkedId() if self.nav.checkedId() >= 0 else self.HOME)
 
     def end_review(self) -> None:
         if not self.review.ai_busy:
@@ -270,7 +316,7 @@ def main(db: Database | None = None) -> int:
     font = QFont(app.font())
     font.setPointSizeF(11)
     app.setFont(font)
-    app.setStyleSheet(theme.QSS)
+    app.setStyleSheet(theme.apply(theme.resolve(config.load().get("theme"))))
     app.setWindowIcon(theme.app_icon())
     translator = QTranslator(app)  # textes de Qt lui-même (clic droit, fenêtre de choix de fichiers) en français
     if translator.load("qtbase_fr", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):

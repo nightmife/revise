@@ -24,8 +24,8 @@ import zipfile
 from pathlib import Path
 
 from revise import config, net
-from revise.engines import Progress, distractors
-from revise.engines.prompt import CARD_SCHEMA, generate_cards
+from revise.engines import Progress, Step, distractors, scaled
+from revise.engines.prompt import CARD_SCHEMA, TRAPS_START, generate_cards
 from revise.models import CardDraft, ReviseError
 
 LLAMA_TAG = "b12374"  # version de llama.cpp, figée pour que les noms de fichiers restent valides
@@ -127,7 +127,8 @@ def download(url: str, dest: Path, progress: Progress, label: str, expected: int
                         pct = int(have * 100 / total) if total else 0
                         if pct != last:
                             last = pct
-                            progress(f"Téléchargement de {label} : {pct} % de {total / 1e9:.2f} Go (une seule fois)")
+                            progress(Step(f"Téléchargement de {label} : {pct} % de {total / 1e9:.2f} Go (une seule fois)",
+                                          pct / 100, "download"))
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             raise ReviseError(f"Téléchargement de {label} interrompu ({net.reason(e)}). Vérifie ta connexion et relance "
                               "l'import : il reprendra où il s'est arrêté.") from e
@@ -275,6 +276,7 @@ class EmbeddedEngine:
         self.start(self.progress)
         payload = {
             "temperature": 0.2,
+            "cache_prompt": True,  # les consignes, identiques d'un morceau à l'autre, ne sont lues qu'une fois
             "max_tokens": MAX_TOKENS,
             "response_format": {"type": "json_schema",
                                 "json_schema": {"name": "reponse", "strict": True, "schema": schema}},
@@ -296,6 +298,6 @@ class EmbeddedEngine:
 
     def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
         self.progress = progress
-        title, cards = generate_cards(pdf, subject, progress, self.chat, "IA intégrée")
-        distractors.add_to_drafts(cards, subject, self.chat, progress, "IA intégrée")
+        title, cards = generate_cards(pdf, subject, scaled(progress, 0, TRAPS_START), self.chat, "IA intégrée")
+        distractors.add_to_drafts(cards, subject, self.chat, scaled(progress, TRAPS_START, 1), "IA intégrée")
         return title, cards

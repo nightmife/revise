@@ -54,7 +54,8 @@ def test_generate_cards_filters_and_retries(pdf):
     assert [c.question for c in cards] == ["Qu'est-ce qu'une pile ?", "Que signifie FIFO pour une file ?"]
     assert cards[0].page == 1 and cards[1].page is None and cards[1].kind == "qa"
     assert "=== Page 3 ===" in seen[0][1] and "Matière : Algo" in seen[0][1] and "JSON" in seen[0][0]
-    assert msgs == ["IA test : pages 1-3 — morceau 1/1"]
+    assert msgs == ["IA test : pages 1-3 — morceau 1/1", "IA test : 2 cartes écrites"]
+    assert [getattr(m, "fraction", None) for m in msgs] == [0.0, 1.0]
 
 
 def test_generate_cards_errors(pdf, monkeypatch):

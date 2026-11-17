@@ -10,16 +10,24 @@ from revise.gui import theme
 
 # Du plus précis au plus général : la première famille qui contient le jeton donne sa couleur.
 CODE_COLORS = (
-    ("Comment", theme.MUTED), ("Keyword", "#c792ea"), ("Operator.Word", "#c792ea"),
+    ("Comment", None), ("Keyword", "#c792ea"), ("Operator.Word", "#c792ea"),
     ("Name.Function", "#82aaff"), ("Name.Class", "#ffcb6b"), ("Name.Decorator", "#82aaff"),
     ("Name.Builtin", "#89ddff"), ("Name.Tag", "#f07178"), ("Name.Attribute", "#ffcb6b"),
     ("Literal.String", "#c3e88d"), ("Literal.Number", "#f78c6c"), ("Operator", "#89ddff"),
+)
+# Mêmes familles, teintes foncées lisibles sur fond clair.
+CODE_COLORS_LIGHT = (
+    ("Comment", None), ("Keyword", "#7c3aed"), ("Operator.Word", "#7c3aed"),
+    ("Name.Function", "#1d4ed8"), ("Name.Class", "#a16207"), ("Name.Decorator", "#1d4ed8"),
+    ("Name.Builtin", "#0e7490"), ("Name.Tag", "#be123c"), ("Name.Attribute", "#a16207"),
+    ("Literal.String", "#15803d"), ("Literal.Number", "#c2410c"), ("Operator", "#0e7490"),
 )
 
 
 def _color(token) -> str | None:
     name = str(token).removeprefix("Token.")
-    for family, color in CODE_COLORS:
+    for family, color in (CODE_COLORS if theme.is_dark() else CODE_COLORS_LIGHT):
+        color = color or theme.MUTED
         if name == family or name.startswith(family + "."):
             return color
     return None

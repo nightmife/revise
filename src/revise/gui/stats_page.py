@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import (QFrame, QHeaderView, QLabel, QScrollArea, QTableWidget, QTableWidgetItem,
-                               QToolTip, QVBoxLayout, QWidget, QHBoxLayout)
+from PySide6.QtWidgets import (QFrame, QHeaderView, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+                               QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget, QHBoxLayout)
 
 from revise import stats
 from revise.db import Database, utcnow
 from revise.gui import theme
-from revise.gui.common import muted, page_header
+from revise.gui.common import cloze_question, muted, page_header, row
+from revise.weak import weak_cards
 
 MONTHS = ["janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc"]
 DAYS = ["lun", "", "mer", "", "ven", "", "dim"]
@@ -169,6 +170,8 @@ class ForecastChart(QWidget):
 
 
 class StatsPage(QWidget):
+    start_weak = Signal(list)  # identifiants des cartes à retravailler
+
     def __init__(self, db: Database):
         super().__init__()
         self.setObjectName("page")
@@ -204,6 +207,21 @@ class StatsPage(QWidget):
         self.table.setMaximumHeight(170)
         self.lay.addWidget(self.table)
         self.lay.addSpacing(10)
+        t = QLabel("Mes points faibles")
+        t.setObjectName("section")
+        self.lay.addWidget(t)
+        self.weak_info = muted("")
+        self.lay.addWidget(self.weak_info)
+        self.weak_list = QListWidget()
+        self.weak_list.setMaximumHeight(230)
+        self.weak_list.setWordWrap(True)
+        self.lay.addWidget(self.weak_list)
+        self.weak_btn = QPushButton("Retravailler mes points faibles")
+        self.weak_btn.setObjectName("primary")
+        self.weak_btn.clicked.connect(lambda: self.start_weak.emit(self.weak_ids))
+        self.lay.addLayout(row(self.weak_btn, None))
+        self.weak_ids: list[int] = []
+        self.lay.addSpacing(10)
         t = QLabel("Régularité (révisions par jour, 26 semaines)")
         t.setObjectName("section")
         self.lay.addWidget(t)
@@ -238,6 +256,20 @@ class StatsPage(QWidget):
                 if j:
                     it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.table.setItem(i, j, it)
+        weak = weak_cards(self.db)
+        self.weak_ids = [w.card.id for w in weak]
+        self.weak_list.clear()
+        for w in weak:
+            it = QListWidgetItem(f"{cloze_question(w.card.question).replace('**', '')}\n    {w.describe()}")
+            it.setToolTip(w.card.answer)
+            self.weak_list.addItem(it)
+        self.weak_list.setVisible(bool(weak))
+        self.weak_btn.setVisible(bool(weak))
+        self.weak_btn.setText(f"Retravailler ces {len(weak)} questions" if len(weak) > 1 else "Retravailler cette question")
+        self.weak_info.setText(
+            "Les questions que tu rates souvent (révisions, QCM et examens blancs). Une question sue deux fois de "
+            "suite sort de la liste." if weak else
+            "Aucun point faible pour l'instant : les questions que tu rates souvent viendront ici.")
         start, counts = stats.daily_counts(self.db, today)
         self.heatmap.set_data(start, dict(counts), today)
         self.forecast.set_data(stats.forecast_counts(self.db, today))

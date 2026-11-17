@@ -14,8 +14,8 @@ import tempfile
 from pathlib import Path
 
 from revise import config
-from revise.engines import Progress, distractors
-from revise.engines.prompt import CARD_SCHEMA, generate_cards
+from revise.engines import Progress, distractors, scaled
+from revise.engines.prompt import CARD_SCHEMA, TRAPS_START, generate_cards
 from revise.models import CardDraft, ReviseError
 
 TIMEOUT = 1200  # secondes par appel
@@ -121,6 +121,6 @@ class ClaudeCodeEngine:
     def generate(self, pdf: Path, subject: str, progress: Progress) -> tuple[str, list[CardDraft]]:
         self.check()
         self.progress = progress
-        title, cards = generate_cards(pdf, subject, progress, self.chat, "Claude", self.chat_pdf)
-        distractors.add_to_drafts(cards, subject, self.chat, progress, "Claude")
+        title, cards = generate_cards(pdf, subject, scaled(progress, 0, TRAPS_START), self.chat, "Claude", self.chat_pdf)
+        distractors.add_to_drafts(cards, subject, self.chat, scaled(progress, TRAPS_START, 1), "Claude")
         return title, cards

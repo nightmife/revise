@@ -30,7 +30,7 @@ def test_select_courses_and_exam_flow(qapp, db, tmp_path):
     page = win.courses
     root = page.tree.topLevelItem(0)
     assert root.text(0) == "LIFAPSD" and root.childCount() == 2
-    assert root.child(0).text(0) == "CM8 - Pile et file"      # nom du fichier, pas le titre généré
+    assert root.child(0).text(0) == "CM8 - Pile et file  ↻"   # nom du fichier ; ↻ = fabriqué par une ancienne version
     assert not page.exam_btn.isEnabled()
     root.child(0).setCheckState(0, Qt.CheckState.Checked)
     assert page.selected_decks() == [d1] and page.exam_btn.isEnabled()

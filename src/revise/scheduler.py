@@ -106,12 +106,16 @@ class Session:
     to_retry: set[int] = field(default_factory=set)
     rng: random.Random = field(default_factory=random.Random)
     order: dict[int, float] = field(default_factory=dict)  # rang tiré au hasard de chaque carte de la séance
+    card_ids: list[int] | None = None  # mode examen limité à ces cartes (points faibles) ; toutes sont posées
 
     def __post_init__(self) -> None:
         now = utcnow()
         if self.cram:
             cards = self.db.cards(subject=self.subject, deck_ids=self.deck_ids, include_suspended=False)
-            if not self.include_known:
+            if self.card_ids is not None:
+                wanted = set(self.card_ids)
+                cards = [c for c in cards if c.id in wanted]
+            elif not self.include_known:
                 # Les cartes déjà sues (dernière note Bien/Facile, encore fraîches en mémoire) ne repassent pas :
                 # on peut quitter et reprendre le bachotage sans tout refaire.
                 last = self.db.last_ratings()

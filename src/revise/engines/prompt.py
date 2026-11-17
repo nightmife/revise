@@ -3,15 +3,21 @@ texte du cours, vérification des cartes produites."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import time
 from collections.abc import Callable
 from pathlib import Path
 
-from revise.engines import Progress
+from revise import config
+from revise.engines import Progress, Step
 from revise.engines.simple import title_from_filename
 from revise.models import CardDraft, ReviseError
-from revise.pdf import page_texts, pages_pdf, visual_pages
+from revise.pdf import clean_pages, page_texts, pages_pdf, visual_pages
+
+CACHE_DAYS = 30  # réponses de l'IA gardées pour reprendre un import interrompu sans tout redemander
+TRAPS_START = 0.7  # part de la barre d'avancement occupée par l'écriture des cartes (le reste : réponses pièges)
 
 CHUNK_CHARS = 7000
 CHUNK_PAGES = 8
@@ -194,14 +200,51 @@ def _split_for_size(pdf: Path, chunks: list[tuple[int, int, str]], pages: list[s
     return out
 
 
+def _cache_dir() -> Path:
+    return config.data_dir() / "cache" / "cartes"
+
+
+def _cache_key(label: str, system: str, user: str, document: bytes | None) -> str:
+    h = hashlib.sha256()
+    for part in (label, system, user):
+        h.update(part.encode("utf-8"))
+        h.update(b"\0")
+    if document:
+        h.update(hashlib.sha256(document).digest())
+    return h.hexdigest()
+
+
+def cache_get(key: str) -> str | None:
+    """Réponse de l'IA déjà reçue pour exactement la même demande (import interrompu puis relancé)."""
+    try:
+        return (_cache_dir() / f"{key}.json").read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def cache_put(key: str, raw: str) -> None:
+    folder = _cache_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{key}.json").write_text(raw, encoding="utf-8")
+        limit = time.time() - CACHE_DAYS * 86400
+        for old in folder.glob("*.json"):
+            if old.stat().st_mtime < limit:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass  # sans cache, un import relancé redemande simplement tout
+
+
 def generate_cards(pdf: Path, subject: str, progress: Progress, chat: Chat, label: str,
                    chat_pdf: ChatPdf | None = None) -> tuple[str, list[CardDraft]]:
     """Génère les cartes d'un cours morceau par morceau avec la fonction `chat` d'un moteur.
 
     `chat_pdf` (moteurs qui savent regarder un PDF) : les pages scannées et celles qui portent un schéma
     lui sont envoyées en PDF, en plus de leur texte."""
-    pages = page_texts(pdf)
-    visual = visual_pages(pdf, pages) if chat_pdf is not None else set()
+    raw_pages = page_texts(pdf)
+    visual = visual_pages(pdf, raw_pages) if chat_pdf is not None else set()
+    # En-têtes, pieds de page et pages « à étapes » retirés : moins de texte, donc moins d'appels à l'IA.
+    pages = clean_pages(raw_pages, pdf.suffix.lower() in (".pdf", ".pptx"))
     chunks = _split_for_size(pdf, text_chunks(pages, visual), pages, visual)
     if not chunks:
         raise ReviseError(f"{pdf.name} ne contient pas de texte (pages scannées ?). Cette IA ne lit que le texte ; "
@@ -209,9 +252,10 @@ def generate_cards(pdf: Path, subject: str, progress: Progress, chat: Chat, labe
     title = ""
     cards: list[CardDraft] = []
     seen: set[str] = set()
+    used_keys: list[str] = []
     for i, (first, last, text, document) in enumerate(chunks, start=1):
-        progress(f"{label} : pages {first}-{last} — morceau {i}/{len(chunks)}"
-                 + (" (avec les images)" if document else ""))
+        progress(Step(f"{label} : pages {first}-{last} — morceau {i}/{len(chunks)}"
+                      + (" (avec les images)" if document else ""), (i - 1) / len(chunks)))
         where = (f"Voici le texte complet du cours ({len(pages)} pages)." if first == 1 and last == len(pages)
                  else f"Voici le texte des pages {first} à {last} d'un cours de {len(pages)} pages.")
         if document:
@@ -219,12 +263,15 @@ def generate_cards(pdf: Path, subject: str, progress: Progress, chat: Chat, labe
                       + (f", sa dernière la page {last}." if last > first else "."))
         user = (f"Matière : {subject}.\n{where}\n\n{text}\n\n"
                 "Crée toutes les cartes utiles pour maîtriser ce contenu à l'examen.")
-        parsed = None
-        for _ in range(2):  # une seconde chance si la réponse n'est pas du JSON valide
-            raw = (chat_pdf(SYSTEM + RULES + VISUAL_RULES, user, document) if document and chat_pdf
-                   else chat(SYSTEM + RULES, user))
+        system = SYSTEM + RULES + (VISUAL_RULES if document and chat_pdf else "")
+        key = _cache_key(label, system, user, document if chat_pdf else None)
+        used_keys.append(key)
+        parsed = parse_cards(cached, first, last) if (cached := cache_get(key)) else None
+        for _ in range(0 if parsed is not None else 2):  # une seconde chance si la réponse n'est pas du JSON
+            raw = chat_pdf(system, user, document) if document and chat_pdf else chat(system, user)
             parsed = parse_cards(raw, first, last)
             if parsed is not None:
+                cache_put(key, raw)
                 break
         if parsed is None:
             continue
@@ -239,4 +286,7 @@ def generate_cards(pdf: Path, subject: str, progress: Progress, chat: Chat, labe
             cards.append(c)
     if not cards:
         raise ReviseError(f"{label} n'a produit aucune carte exploitable pour {pdf.name}.")
+    progress(Step(f"{label} : {len(cards)} cartes écrites", 1.0))
+    for key in used_keys:  # import réussi : le cache ne sert qu'à reprendre un import interrompu
+        (_cache_dir() / f"{key}.json").unlink(missing_ok=True)
     return title or title_from_filename(pdf.stem), cards

@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS decks(
     sha256 TEXT UNIQUE,
     engine TEXT NOT NULL,
     created TEXT NOT NULL,
-    exam_date TEXT             -- date de l'examen (AAAA-MM-JJ), NULL = pas de date
+    exam_date TEXT,            -- date de l'examen (AAAA-MM-JJ), NULL = pas de date
+    gen_version INTEGER        -- version de la fabrication des cartes (NULL = avant la 0.9 ou cours partagé)
 );
 CREATE TABLE IF NOT EXISTS cards(
     id INTEGER PRIMARY KEY,
@@ -50,6 +51,14 @@ CREATE TABLE IF NOT EXISTS reviews(
     state_before INTEGER        -- 0 nouvelle, 1 apprentissage, 2 révision, 3 réapprentissage
 );
 CREATE INDEX IF NOT EXISTS reviews_ts ON reviews(ts);
+CREATE TABLE IF NOT EXISTS quiz_answers(   -- réponses aux QCM et examens blancs (ne touchent pas au planning)
+    id INTEGER PRIMARY KEY,
+    card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    ts TEXT NOT NULL,
+    correct INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'qcm'      -- 'qcm' ou 'examen'
+);
+CREATE INDEX IF NOT EXISTS quiz_answers_card ON quiz_answers(card_id);
 """
 
 
@@ -89,6 +98,7 @@ class Deck:
     engine: str
     created: str
     exam_date: str | None = None  # AAAA-MM-JJ
+    gen_version: int | None = None  # version de la fabrication des cartes (None = ancienne ou inconnue)
 
 
 @dataclass
@@ -142,9 +152,14 @@ class Database:
             with self.conn:
                 self.conn.execute("ALTER TABLE cards ADD COLUMN quiz_answer TEXT")
         # Bases créées avant la version 0.6 : pas de date d'examen.
-        if "exam_date" not in {r["name"] for r in self.conn.execute("PRAGMA table_info(decks)")}:
+        deck_columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(decks)")}
+        if "exam_date" not in deck_columns:
             with self.conn:
                 self.conn.execute("ALTER TABLE decks ADD COLUMN exam_date TEXT")
+        # Bases créées avant la version 0.9 : version de fabrication des cartes inconnue.
+        if "gen_version" not in deck_columns:
+            with self.conn:
+                self.conn.execute("ALTER TABLE decks ADD COLUMN gen_version INTEGER")
 
     def close(self) -> None:
         self.conn.close()
@@ -217,12 +232,12 @@ class Database:
         return self._deck(row) if row else None
 
     def add_deck(self, subject: str, title: str, source: str | None, sha: str | None, engine: str,
-                 cards: list[CardDraft]) -> int:
+                 cards: list[CardDraft], gen_version: int | None = None) -> int:
         now = iso(utcnow())
         with self.conn:
             cur = self.conn.execute(
-                "INSERT INTO decks(subject, title, source, sha256, engine, created) VALUES (?,?,?,?,?,?)",
-                (subject, title, source, sha, engine, now))
+                "INSERT INTO decks(subject, title, source, sha256, engine, created, gen_version)"
+                " VALUES (?,?,?,?,?,?,?)", (subject, title, source, sha, engine, now, gen_version))
             deck_id = int(cur.lastrowid)
             for c in cards:
                 self._insert_card(deck_id, c, now)
@@ -361,13 +376,69 @@ class Database:
             self.conn.executemany("UPDATE decks SET exam_date = ? WHERE id = ?",
                                   [(exam_date, int(d)) for d in deck_ids])
 
+    def set_deck_source(self, deck_id: int, source: str) -> None:
+        """Nouvel emplacement du fichier d'un cours (déplacé ou renommé)."""
+        with self.conn:
+            self.conn.execute("UPDATE decks SET source = ? WHERE id = ?", (source, deck_id))
+
+    def replace_deck_cards(self, deck_id: int, drafts: list[CardDraft], matches: dict[int, int], *,
+                           source: str | None, sha: str | None, engine: str, gen_version: int) -> tuple[int, int, int]:
+        """Remplace les cartes d'un cours par une nouvelle fabrication. `matches` : indice dans `drafts` →
+        identifiant de l'ancienne carte qui dit la même chose ; celle-ci prend le nouveau texte et garde sa
+        progression (planning, historique, mise de côté). Les anciennes cartes sans équivalent sont retirées.
+        Retourne (cartes qui gardent leur progression, nouvelles cartes, cartes retirées)."""
+        now = iso(utcnow())
+        old_ids = {int(r[0]) for r in self.conn.execute("SELECT id FROM cards WHERE deck_id = ?", (deck_id,))}
+        kept = {old for old in matches.values() if old in old_ids}
+        with self.conn:
+            for i, c in enumerate(drafts):
+                old = matches.get(i)
+                if old in kept:
+                    self.conn.execute(
+                        "UPDATE cards SET kind=?, question=?, answer=?, page=?, section=?, distractors=?, quiz_answer=?"
+                        " WHERE id=?",
+                        (c.kind, c.question, c.answer, c.page, c.section,
+                         json.dumps(c.distractors, ensure_ascii=False) if c.distractors else None,
+                         c.quiz_answer or None, old))
+                else:
+                    self._insert_card(deck_id, c, now)
+            gone = old_ids - kept
+            self.conn.executemany("DELETE FROM cards WHERE id = ?", [(i,) for i in gone])
+            self.conn.execute("UPDATE decks SET source = ?, sha256 = ?, engine = ?, gen_version = ? WHERE id = ?",
+                              (source, sha, engine, gen_version, deck_id))
+        return len(kept), len(drafts) - len(kept), len(gone)
+
+    # ------------------------------------------------------------ résultats
+    def record_quiz_answer(self, card_id: int, correct: bool, source: str = "qcm") -> int:
+        with self.conn:
+            cur = self.conn.execute("INSERT INTO quiz_answers(card_id, ts, correct, source) VALUES (?,?,?,?)",
+                                    (card_id, iso(utcnow()), int(bool(correct)), source))
+        return int(cur.lastrowid)
+
+    def set_quiz_answer(self, answer_id: int, correct: bool) -> None:
+        """Corrige un résultat (l'étudiant estime que sa réponse écrite était juste)."""
+        with self.conn:
+            self.conn.execute("UPDATE quiz_answers SET correct = ? WHERE id = ?", (int(bool(correct)), answer_id))
+
+    def answer_history(self) -> dict[int, list[float]]:
+        """Pour chaque carte, ses résultats du plus ancien au plus récent : 1 = juste, 0 = faux, 0,5 = de justesse.
+        Révisions (« Bien »/« Facile » = juste, « Difficile » = de justesse) et QCM / examens blancs."""
+        out: dict[int, list[float]] = {}
+        rows = self.conn.execute(
+            "SELECT card_id, ts, CASE WHEN rating >= 3 THEN 1.0 WHEN rating = 2 THEN 0.5 ELSE 0.0 END FROM reviews"
+            " UNION ALL SELECT card_id, ts, CAST(correct AS REAL) FROM quiz_answers ORDER BY 2")
+        for card_id, _, result in rows:
+            out.setdefault(int(card_id), []).append(float(result))
+        return out
+
     def reviews_since(self, since: datetime) -> list[sqlite3.Row]:
         return list(self.conn.execute("SELECT * FROM reviews WHERE ts >= ? ORDER BY ts", (iso(since),)))
 
     # ------------------------------------------------------------- conversions
     @staticmethod
     def _deck(r: sqlite3.Row) -> Deck:
-        return Deck(r["id"], r["subject"], r["title"], r["source"], r["engine"], r["created"], r["exam_date"])
+        return Deck(r["id"], r["subject"], r["title"], r["source"], r["engine"], r["created"], r["exam_date"],
+                    r["gen_version"])
 
     @staticmethod
     def _card(r: sqlite3.Row) -> Card:

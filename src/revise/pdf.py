@@ -113,3 +113,49 @@ def extract_pages(reader: PdfReader, start: int, end: int) -> bytes:
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+BOILERPLATE_SHARE = 0.3   # une ligne présente sur au moins 30 % des pages est un en-tête ou un pied de page
+MIN_PAGES_FOR_BOILERPLATE = 6
+
+
+def _line_key(line: str) -> str:
+    """Ligne comparable d'une page à l'autre : sans chiffres (numéro de page, date) ni espaces en trop."""
+    return " ".join("".join("#" if ch.isdigit() else ch for ch in line.lower()).split())
+
+
+def clean_pages(texts: list[str], slides: bool = True) -> list[str]:
+    """Texte des pages débarrassé de ce qui ne s'apprend pas, sans changer la numérotation :
+    - les lignes répétées sur une grande partie des pages (en-tête, nom de l'université, pied de page avec son
+      numéro de page) ;
+    - les pages « à étapes » d'une présentation (chaque page reprend la précédente et ajoute une ligne) :
+      seule la dernière est gardée, les autres deviennent vides.
+    `slides` : faux pour un document Word ou un texte, qui n'a ni en-têtes répétés ni pages à étapes.
+    Moins de texte = moins d'appels à l'IA et des cartes sans doublon."""
+    pages = [[ln.strip() for ln in t.splitlines() if ln.strip()] for t in texts]
+    if not slides:
+        return ["\n".join(lines) for lines in pages]
+    if len(pages) >= MIN_PAGES_FOR_BOILERPLATE:
+        exact: dict[str, int] = {}
+        masked: dict[str, int] = {}
+        for lines in pages:
+            for key in {" ".join(ln.lower().split()) for ln in lines if len(ln) <= 120}:
+                exact[key] = exact.get(key, 0) + 1
+            # Numéros (de page, de date) qui changent : seulement dans un pied de page (dernière ligne).
+            for key in {_line_key(ln) for ln in lines[-1:] if len(ln) <= 120 and len(ln.split()) >= 3}:
+                masked[key] = masked.get(key, 0) + 1
+        limit = max(3, BOILERPLATE_SHARE * len(pages))
+
+        def repeated(i: int, line: str, count: int) -> bool:
+            if len(line) > 120:
+                return False
+            if exact.get(" ".join(line.lower().split()), 0) >= limit:
+                return True
+            return i == count - 1 and len(line.split()) >= 3 and masked.get(_line_key(line), 0) >= limit
+        pages = [[ln for i, ln in enumerate(lines) if not repeated(i, ln, len(lines))] for lines in pages]
+    out = ["\n".join(lines) for lines in pages]
+    keys = [{" ".join(ln.split()) for ln in lines} for lines in pages]
+    for i in range(len(pages) - 1):
+        if keys[i] and keys[i] <= keys[i + 1]:
+            out[i] = ""
+    return out

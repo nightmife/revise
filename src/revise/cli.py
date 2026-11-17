@@ -161,6 +161,36 @@ def cmd_traps(db: Database, args) -> int:
     return 0
 
 
+def cmd_update(db: Database, args) -> int:
+    """Refait les cartes de cours déjà importés sans perdre la progression."""
+    from revise.importer import is_outdated, update_deck
+
+    deck_ids = resolve_decks(db, args.cours, None)
+    if deck_ids is None:
+        deck_ids = [d.id for d in db.decks() if is_outdated(d)]
+        if not deck_ids:
+            console.print("Tous les cours sont à jour (pour en refaire un quand même : --cours …).")
+            return 0
+    if args.fichier and len(deck_ids) != 1:
+        raise ReviseError("--fichier ne va qu'avec un seul cours (--cours …).")
+    engine = pick_engine(args.moteur, args.claude_modele)
+    errors = 0
+    try:
+        for deck_id in deck_ids:
+            deck = db.deck(deck_id)
+            try:
+                with console.status(f"{deck.title}…") as status:
+                    res = update_deck(db, engine, deck_id, status.update, Path(args.fichier) if args.fichier else None)
+                console.print(f"[green]✓[/] {deck.title} : {res.kept} cartes gardent ta progression, "
+                              f"{res.added} nouvelles, {res.removed} retirées")
+            except ReviseError as e:
+                errors += 1
+                err_console.print(f"[red]✗[/] {deck.title} : {e}")
+    finally:
+        getattr(engine, "close", lambda: None)()
+    return 1 if errors else 0
+
+
 def resolve_decks(db: Database, tokens: list[str] | None, subject: str | None) -> list[int] | None:
     """`--cours 3 8 CM9` : numéros de paquet ou morceaux de titre (« CM8 », « pile »)."""
     if not tokens:
@@ -333,6 +363,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--titre", help="titre du cours (un seul PDF)")
     s.add_argument("--forcer", action="store_true", help="réimporter un PDF déjà importé (remplace le paquet)")
     s.set_defaults(func=cmd_import)
+
+    s = sub.add_parser("maj", help="refaire les cartes et QCM de cours déjà importés (ancienne version ou fichier "
+                                   "modifié) sans perdre la progression")
+    s.add_argument("-c", "--cours", nargs="+", metavar="COURS",
+                   help="ces cours (défaut : ceux fabriqués par une ancienne version)")
+    s.add_argument("--fichier", help="nouvelle version du fichier du cours (un seul cours)")
+    s.add_argument("--moteur", choices=["ia", "en-ligne", "abonnement", "simple"], default="ia")
+    s.add_argument("--claude-modele", choices=["auto", "opus", "sonnet", "haiku"])
+    s.set_defaults(func=cmd_update)
 
     s = sub.add_parser("partager", help="enregistrer des cours dans un fichier .revise à envoyer à quelqu'un")
     s.add_argument("fichier", help="fichier à écrire, ex. algo.revise")

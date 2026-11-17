@@ -23,6 +23,18 @@ cartes, jusqu'à ce que tu les saches. Donne aussi la **date de l'examen** : le 
 
 **Le QCM** sert à se tester autrement ; il ne change rien au planning de révision.
 
+**L'examen blanc** mélange QCM et réponses à écrire, en temps limité, noté sur 20 avec un corrigé.
+
+**Mes points faibles** (dans *Mes progrès*, et sur l'*Accueil*) : les questions que tu rates souvent, en révision, au QCM ou à l'examen blanc. Un clic pour les retravailler.
+
+**Écrire mes réponses** (case en haut d'une révision) : tape ta réponse avant de la voir ; l'application la compare à celle de la carte et te conseille une note.
+
+**Une carte bizarre ?** Pendant la révision, *Voir la page du cours* montre d'où elle vient, et *Carte mal faite ?* demande à l'IA de la réécrire (tu choisis la version à garder).
+
+**Un cours d'une ancienne version**, ou dont le fichier a changé (marqué ↻ dans *Mes cours*) : coche-le puis *Mettre à jour…* — les cartes et QCM sont refaits, ta progression est gardée.
+
+**Apparence** (en bas à gauche) : sombre, clair, ou comme ton ordinateur.
+
 ---
 
 ### Au clavier, pendant une révision
@@ -32,6 +44,9 @@ cartes, jusqu'à ce que tu les saches. Donne aussi la **date de l'examen** : le 
 | `Espace` | afficher la réponse |
 | `1` `2` `3` `4` | à revoir · difficile · bien · facile |
 | `X` | demander une explication à l'IA |
+| `P` | voir la page du cours |
+| `R` | carte mal faite : la faire réécrire par l'IA |
+| `Entrée` | (en écrivant ta réponse) la vérifier |
 | `E` | corriger la carte |
 | `S` | ne plus me poser cette carte |
 | `Échap` | terminer la séance |

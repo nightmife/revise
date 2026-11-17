@@ -31,7 +31,7 @@ Quatre moteurs, au choix dans l'onglet **Ajouter un cours** (ou `--moteur`) :
 | `ia` — IA intégrée (défaut) | gratuit, hors ligne, sans compte | plusieurs minutes par cours | bonne |
 | `en-ligne` — IA en ligne | gratuit : sans clé (lent), ou avec tes clés API gratuites (Groq, Cerebras, Gemini, Mistral, OpenRouter) | ~15 min par cours sans clé, quelques secondes avec | bonne à très bonne |
 | `abonnement` — ton abonnement Claude | compris dans l'abonnement (Pro, Max…) | quelques minutes par cours | excellente |
-| `simple` — sans IA | gratuit, hors ligne | instantané | moyenne, à retoucher, QCM facile |
+| `simple` — sans IA | gratuit, hors ligne | instantané | correcte : moins de cartes, mais exactes ; QCM facile |
 
 **IA intégrée.** Au premier import, l'application télécharge toute seule le moteur d'IA (llama.cpp, ~40 Mo) et le
 modèle : Gemma 3 12B (7,3 Go) si la machine a 16 Go de mémoire ou plus, sinon Gemma 3 4B (2,5 Go). Un téléchargement
@@ -50,6 +50,15 @@ clés restent sur ta machine ; le texte du cours est envoyé au service qui rép
 l'option n'apparaît dans l'application que dans ce cas. Aucune clé à créer ; l'usage compte dans les limites de
 l'abonnement. Le modèle se choisit à côté de l'option (Automatique, Opus, Sonnet, Haiku) ; en ligne de commande :
 `--claude-modele opus`.
+
+**Sans IA.** Repère ce qui s'apprend à coup sûr : énoncés (théorème, définition…), définitions (« Une pile
+est… », « On appelle… », « L'impôt : … »), rôles (« X permet de… »), sigles (initiales vérifiées), arrêts et
+décisions (« CE, 28 juin 1963, Narcy »), complexités, énumérations (« Les trois critères sont : … ») et dates (texte
+à trous). Les en-têtes, pieds de page et pages « à étapes » des diaporamas sont retirés avant.
+
+**Moins d'appels à l'IA.** Avant d'envoyer un cours à une IA, les en-têtes, pieds de page et pages « à étapes »
+sont retirés (souvent un bon tiers du texte d'un diaporama). Si un import est coupé (quota épuisé, coupure), le
+relancer reprend où il s'était arrêté : les morceaux déjà écrits par l'IA ne sont pas redemandés.
 
 **Formats lus** : PDF, PowerPoint (`.pptx`, une diapositive = une page), Word (`.docx`), texte (`.txt`, `.md`).
 Les anciens `.ppt` / `.doc` sont à enregistrer en `.pptx` / `.docx`.
@@ -80,6 +89,9 @@ Dans l'application :
 - **Comment ça marche ?** (en bas à gauche, ou touche `F1`) : le mode d'emploi en une page et les raccourcis clavier.
 - **Ajouter un cours** : glisse des PDF (ou « Choisir des fichiers… »), choisis qui écrit les cartes (et, pour
   l'abonnement Claude, le modèle), « Créer les cartes ». « Configurer… » règle les clés de l'IA en ligne.
+  La liste propose tous les cours du dossier choisi (« Choisir le dossier… », par défaut Téléchargements et
+  Documents) **et de tous ses sous-dossiers**, rangés par dossier ; la recherche filtre aussi sur le dossier.
+  Pendant l'import, une barre donne le pourcentage et le temps restant.
 - **Mes cours** : coche un ou plusieurs cours (un clic sur la ligne), puis choisis une activité :
   - **Réviser** : planning de répétition espacée (cartes à revoir, puis nouvelles du jour). Les cartes sont
     posées dans un ordre aléatoire et tirées au hasard dans tous les cours cochés ;
@@ -89,8 +101,21 @@ Dans l'application :
   - **QCM** : quatre propositions de même longueur (touches `1` à `4`, `Entrée` pour continuer), score et
     erreurs à refaire.
     Le QCM ne modifie pas le planning de révision.
+  - **Examen blanc** : QCM et réponses à écrire mélangés, chronométré, noté sur 20, avec corrigé (une réponse
+    écrite mal corrigée par l'application peut être comptée juste).
+- **Mettre à jour…** (dans Mes cours) : refait les cartes et les QCM des cours cochés — ceux fabriqués par une
+  ancienne version sont marqués ↻, ou ceux dont le fichier a changé — sans perdre la progression (une nouvelle
+  carte qui dit la même chose qu'une ancienne reprend son planning). Plus besoin de supprimer et réimporter.
+- **Mes points faibles** (Mes progrès, et Accueil) : les questions souvent ratées en révision, au QCM ou en
+  examen blanc, et un bouton pour les retravailler.
+- **Apparence** (en bas à gauche) : sombre, clair ou automatique (comme le système).
 - Révision : `Espace` affiche la réponse, `1` à revoir, `2` difficile, `3` bien, `4` facile,
-  `E` corriger la carte, `S` ne plus la poser, `X` « Explique-moi », `Échap` terminer.
+  `E` corriger la carte, `S` ne plus la poser, `X` « Explique-moi », `P` voir la page du cours,
+  `R` « Carte mal faite ? » (l'IA la réécrit d'après la page, tu choisis la version), `Échap` terminer.
+  Case **Écrire mes réponses** : tu tapes ta réponse, l'application la compare à la bonne (fautes de frappe et
+  accents tolérés, chiffres exacts) et conseille une note.
+- **Voir la page du cours** affiche la page du PDF en image (module `pypdfium2`, installé avec l'application),
+  sinon son texte ; si le fichier a été déplacé, « Retrouver le fichier… ».
 - **Explique-moi** (réponse affichée) : l'IA choisie pour les imports explique la réponse avec d'autres mots
   et un exemple.
 - **Date d'examen…** (dans Mes cours) : donne le jour de l'examen des cours cochés. La colonne « Examen » montre
@@ -120,6 +145,8 @@ revise cle --fournisseur groq --cle gsk_…            # une clé par service (g
 revise cle --sans-cle non                            # couper le service gratuit sans clé
 revise reviser --cours CM7 CM8 --examen
 revise pieges --cours CM7                            # réponses pièges des QCM d'un cours déjà importé
+revise maj                                           # refaire les cours d'une ancienne version (progression gardée)
+revise maj --cours CM7 --fichier CM7-v2.pdf --moteur abonnement   # nouvelle version du fichier d'un cours
 revise pieges --moteur abonnement                    # … pour tous les cours, avec l'abonnement Claude
 revise stats
 revise partager algo.revise --cours CM7 CM8          # cours à envoyer à quelqu'un (--anki : fichier pour Anki)

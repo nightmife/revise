@@ -266,3 +266,29 @@ def save_cancel_buttons() -> QDialogButtonBox:
     box.button(QDialogButtonBox.StandardButton.Save).setText("Enregistrer")
     box.button(QDialogButtonBox.StandardButton.Cancel).setText("Annuler")
     return box
+
+
+class Eta:
+    """Temps restant estimé d'après l'avancement (0 à 1) et le temps déjà passé."""
+
+    def __init__(self, clock: Callable[[], float] | None = None):
+        import time
+        self.clock = clock or time.monotonic
+        self.start = self.clock()
+
+    def restart(self) -> None:
+        self.start = self.clock()
+
+    def text(self, fraction: float) -> str:
+        elapsed = self.clock() - self.start
+        if fraction >= 1:
+            return ""
+        if fraction < 0.03 or elapsed < 5:
+            return "calcul du temps restant…"
+        left = elapsed / fraction * (1 - fraction)
+        if left < 60:
+            return "moins d'une minute restante"
+        minutes = round(left / 60)
+        if minutes < 60:
+            return f"environ {minutes} min restante{'s' if minutes > 1 else ''}"
+        return f"environ {minutes // 60} h {minutes % 60:02d} restantes"

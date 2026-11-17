@@ -17,6 +17,7 @@ from revise import config, exam, share, today
 from revise.db import Database, deck_label, parse_iso, utcnow
 from revise.gui import theme
 from revise.gui.common import ActionCard, confirm, flow, muted, page_header, row
+from revise.importer import is_outdated
 from revise.models import ReviseError
 
 DECK_ROLE = Qt.ItemDataRole.UserRole
@@ -104,6 +105,7 @@ class CoursesPage(QWidget):
     start_review = Signal(list, bool, bool, int)  # paquets, examen, inclure les connues, nouvelles/jour
     open_learn = Signal(list)
     open_quiz = Signal(list)
+    open_exam = Signal(list)
     edit_cards = Signal(int)
     go_import = Signal()
 
@@ -186,11 +188,18 @@ class CoursesPage(QWidget):
         self.share_btn.setToolTip("Enregistre les cours cochés dans un fichier à envoyer à quelqu'un : il n'a plus "
                                   "qu'à le glisser dans « Ajouter un cours ». Ta progression n'est pas incluse.")
         self.share_btn.clicked.connect(self._share)
+        self.update_btn = QPushButton("Mettre à jour…")
+        self.update_btn.setToolTip("Refait les cartes et les QCM des cours cochés avec la version actuelle de "
+                                   "l'application (ou la nouvelle version du fichier), sans perdre ta progression.")
+        self.update_btn.clicked.connect(self._update_courses)
         self.delete_btn = QPushButton("Supprimer")
         self.delete_btn.setObjectName("danger")
         self.delete_btn.clicked.connect(self._delete)
         lay.addWidget(flow(self.all_btn, self.none_btn, self.selection_label, self.edit_btn,
-                           self.exam_btn_date, self.share_btn, self.delete_btn))
+                           self.exam_btn_date, self.update_btn, self.share_btn, self.delete_btn))
+        self.outdated_note = muted("")
+        self.outdated_note.setVisible(False)
+        lay.addWidget(self.outdated_note)
 
         self.what = QLabel("Que veux-tu faire ?")
         self.what.setObjectName("section")
@@ -204,7 +213,9 @@ class CoursesPage(QWidget):
         self.learn_btn.clicked.connect(lambda: self.open_learn.emit(self.selected_decks()))
         self.quiz_btn = ActionCard("QCM", "Quatre propositions, une seule bonne réponse.")
         self.quiz_btn.clicked.connect(lambda: self.open_quiz.emit(self.selected_decks()))
-        self.actions = (self.review_btn, self.exam_btn, self.learn_btn, self.quiz_btn)
+        self.mock_btn = ActionCard("Examen blanc", "QCM et réponses à écrire, chronométré, noté sur 20.")
+        self.mock_btn.clicked.connect(lambda: self.open_exam.emit(self.selected_decks()))
+        self.actions = (self.review_btn, self.exam_btn, self.learn_btn, self.quiz_btn, self.mock_btn)
         actions = row(*self.actions, spacing=10)
         for i in range(len(self.actions)):
             actions.setStretch(i, 1)
@@ -254,7 +265,12 @@ class CoursesPage(QWidget):
                 item.setTextAlignment(5, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 item.setData(0, DECK_ROLE, d.id)
                 item.setData(MASTERY_COLUMN, MASTERY_ROLE, (known, len(cards)))
-                item.setToolTip(0, f"{d.title}\n{d.source or ''}\nImporté le {d.created[:10]} ({d.engine})")
+                outdated = is_outdated(d)
+                if outdated:
+                    item.setText(0, f"{deck_label(d)}  ↻")
+                item.setToolTip(0, f"{d.title}\n{d.source or ''}\nImporté le {d.created[:10]} ({d.engine})"
+                                + ("\n↻ Fabriqué par une ancienne version : « Mettre à jour… » refait ses cartes "
+                                   "sans perdre ta progression." if outdated else ""))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.CheckState.Checked if d.id in checked else Qt.CheckState.Unchecked)
                 for c in range(1, 5):
@@ -271,6 +287,7 @@ class CoursesPage(QWidget):
         for w in (self.tree, self.all_btn, self.none_btn, self.selection_label, self.what, *self.actions,
                   self.new_per_day,
                   self.include_known, self.edit_btn, self.exam_btn_date, self.share_btn, self.delete_btn,
+                  self.update_btn,
                   self.settings_label):
             w.setVisible(has)
         self.empty.setVisible(not has)
@@ -322,6 +339,12 @@ class CoursesPage(QWidget):
         self.edit_btn.setEnabled(len(sel) == 1)
         self.edit_btn.setToolTip("" if len(sel) == 1 else "Coche un seul cours pour voir ses cartes.")
         self.share_btn.setEnabled(bool(sel))
+        self.update_btn.setEnabled(bool(sel))
+        old = [d for d in self.db.decks() if is_outdated(d)]
+        self.outdated_note.setText(f"↻ {len(old)} cours fabriqué{'s' if len(old) > 1 else ''} par une ancienne "
+                                   "version : coche-les puis « Mettre à jour… » pour de meilleures cartes et QCM, "
+                                   "sans perdre ta progression.")
+        self.outdated_note.setVisible(bool(old))
         self.exam_btn_date.setEnabled(bool(sel))
         self.delete_btn.setEnabled(bool(sel))
         needed, soonest = self.exam_plan(sel)
@@ -409,4 +432,12 @@ class CoursesPage(QWidget):
             return
         for d in sel:
             self.db.delete_deck(d)
+        self.refresh()
+
+    def _update_courses(self) -> None:
+        sel = self.selected_decks()
+        if not sel:
+            return
+        from revise.gui.update_courses import UpdateCoursesDialog
+        UpdateCoursesDialog(self.db, sel, self).exec()
         self.refresh()

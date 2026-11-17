@@ -31,7 +31,7 @@ jobs:
       - name: Icône
         run: python packaging/make_icon.py build/icon.png
       - name: Construction de revise.exe
-        run: pyinstaller --noconfirm --onefile --windowed --name revise --icon build/icon.png --collect-submodules pygments.lexers --paths src packaging/revise_gui.py
+        run: pyinstaller --noconfirm --onefile --windowed --name revise --icon build/icon.png --collect-submodules pygments.lexers --collect-all pypdfium2 --collect-all pypdfium2_raw --paths src packaging/revise_gui.py
       - name: Vérification du démarrage
         shell: pwsh
         run: |
@@ -82,6 +82,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --windowed --name revise --icon build/icon.png
           --osx-bundle-identifier io.github.nightmife.revise --collect-submodules pygments.lexers
+          --collect-all pypdfium2 --collect-all pypdfium2_raw
           --paths src packaging/revise_gui.py
       - name: Signature locale (sans compte développeur Apple)
         run: codesign --force --deep --sign - dist/revise.app

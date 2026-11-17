@@ -9,7 +9,7 @@ import json
 import re
 from collections.abc import Callable
 
-from revise.engines import Progress
+from revise.engines import Progress, Step
 from revise.models import CardDraft, ReviseError
 from revise.quiz import is_prepared
 
@@ -187,7 +187,8 @@ def add_to_drafts(cards: list[CardDraft], subject: str, chat: SchemaChat, progre
     celles qui restent sans mauvaises réponses pourront être préparées plus tard depuis l'onglet QCM."""
     for start in range(0, len(cards), batch_size):
         batch = cards[start:start + batch_size]
-        progress(f"{label} : réponses pièges du QCM — {min(start + batch_size, len(cards))}/{len(cards)}")
+        progress(Step(f"{label} : réponses pièges du QCM — {min(start + batch_size, len(cards))}/{len(cards)}",
+                      start / max(1, len(cards))))
         try:
             got = ask([(c.kind, c.question, c.answer) for c in batch], subject, chat)
         except ReviseError:
@@ -211,7 +212,7 @@ def prepare(db, deck_ids: list[int], chat: SchemaChat, progress: Progress,
             if should_stop():
                 return filled
             batch = cards[start:start + batch_size]
-            progress(f"Préparation des réponses pièges : {done}/{len(todo)} questions")
+            progress(Step(f"Préparation des réponses pièges : {done}/{len(todo)} questions", done / max(1, len(todo))))
             got = ask([(c.kind, c.question, c.answer) for c in batch], subjects.get(deck_id, ""), chat)
             for c, (right, wrong) in zip(batch, got):
                 if wrong:

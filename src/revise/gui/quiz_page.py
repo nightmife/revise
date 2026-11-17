@@ -412,6 +412,7 @@ class QuizPage(QWidget):
         if i >= len(q.choices):
             return
         self.answered = True
+        self.db.record_quiz_answer(q.card.id, i == q.correct)  # pour « Mes points faibles » (planning inchangé)
         for j, widget in enumerate(self.choices[:len(q.choices)]):
             widget.set_state("good" if j == q.correct else "bad" if j == i else "off")
         if i == q.correct:

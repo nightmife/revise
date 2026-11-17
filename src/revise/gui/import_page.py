@@ -12,17 +12,69 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFil
                                QScrollArea, QVBoxLayout, QWidget)
 
 from revise import config, documents, share
-from revise.db import Database, file_sha256
+from revise.db import Database, deck_label, file_sha256
+from revise.engines import fraction_of
 from revise.engines import online
 from revise.engines.claude_code import MODELS as CLAUDE_MODELS, claude_binary
-from revise.gui.common import muted, page_header, row, save_cancel_buttons, step_header
-from revise.importer import guess_subject, import_pdf
+from revise.gui.common import Background, Eta, flow, muted, page_header, row, save_cancel_buttons, step_header
+from revise.importer import guess_subject, import_pdf, update_deck
 from revise.models import ReviseError
 
 PATH_ROLE = Qt.ItemDataRole.UserRole
 AUTO_SUBJECT = "Automatique (d'après le nom du fichier)"
-SEARCH_DIRS = ["Downloads", "Téléchargements", "Documents"]
+SEARCH_DIRS = ["Downloads", "Téléchargements", "Documents"]  # dossiers fouillés tant qu'on n'en a pas choisi
 SCAN_SUFFIXES = (".pdf", ".pptx", ".docx")  # la recherche automatique laisse de côté les fichiers texte
+SKIP_DIRS = {"node_modules", "__pycache__", "site-packages", "venv", ".venv", "appdata", "library", "$recycle.bin",
+             "windows", "program files", "program files (x86)", "system volume information", "build", "dist"}
+MAX_FOUND = 3000
+SCAN_SECONDS = 25.0
+
+
+def scan_dirs() -> list[Path]:
+    """Dossiers où chercher les cours : ceux choisis par l'utilisateur, sinon Téléchargements et Documents."""
+    chosen = config.load().get("scan_dirs")
+    if isinstance(chosen, list) and chosen:
+        return [Path(d) for d in chosen if isinstance(d, str)]
+    return [Path.home() / d for d in SEARCH_DIRS]
+
+
+def find_courses(roots: list[Path], limit: int = MAX_FOUND, seconds: float = SCAN_SECONDS,
+                 clock=None) -> list[tuple[Path, Path]]:
+    """(fichier, dossier de départ) de tous les cours trouvés sous `roots`, à toute profondeur. Les dossiers
+    cachés et ceux des programmes sont sautés ; la recherche s'arrête à `limit` fichiers ou après `seconds`."""
+    import os
+    import time
+    clock = clock or time.monotonic
+    deadline = clock() + seconds
+    found: list[tuple[Path, Path]] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for folder, dirs, files in os.walk(root, onerror=lambda e: None):
+            dirs[:] = sorted(d for d in dirs if not d.startswith((".", "~")) and d.lower() not in SKIP_DIRS)
+            for name in sorted(files):
+                if name.lower().endswith(SCAN_SUFFIXES) and not name.startswith(("~$", ".")):
+                    path = Path(folder) / name
+                    key = os.path.normcase(str(path))
+                    if key not in seen:
+                        seen.add(key)
+                        found.append((path, root))
+                        if len(found) >= limit:
+                            return found
+            if clock() > deadline:
+                return found
+    return found
+
+
+def where(path: Path, root: Path) -> str:
+    """Dossier d'un fichier, à partir du dossier fouillé (« Cours/L2/Algo »)."""
+    try:
+        rel = path.parent.relative_to(root)
+    except ValueError:
+        return str(path.parent)
+    parts = (root.name,) + rel.parts
+    return "/".join(parts)
 
 
 ENGINES = ("ia", "en-ligne", "simple", "abonnement")  # dans l'ordre des boutons radio
@@ -160,25 +212,46 @@ class KeyDialog(QDialog):
 
 
 class ImportWorker(QObject):
-    """Importe les PDF un par un dans un thread (avec sa propre connexion SQLite)."""
+    """Importe les PDF un par un dans un thread (avec sa propre connexion SQLite).
 
-    status = Signal(str)
+    `updates` : cours déjà importés à refaire (identifiant → fichier à lire, None = celui enregistré) ; dans ce
+    cas `pdfs` est ignoré."""
+
+    status = Signal(str, float, str)    # message, avancement global (0 à 1, -1 = inconnu), phase
     file_done = Signal(str, str, bool)  # nom, message, succès
     all_done = Signal(int)
 
-    def __init__(self, db_path: Path, pdfs: list[Path], subject: str | None, engine_name: str):
+    def __init__(self, db_path: Path, pdfs: list[Path], subject: str | None, engine_name: str,
+                 updates: dict[int, Path | None] | None = None):
         super().__init__()
         self.db_path, self.pdfs, self.subject, self.engine_name = db_path, pdfs, subject, engine_name
+        self.updates = updates
         self.cancelled = False
         self.engine = None
+
+    def _progress(self, index: int, total: int, name: str):
+        """Fonction d'avancement d'un fichier : message préfixé, avancement ramené à l'ensemble des fichiers."""
+        def report(message: str) -> None:
+            f = fraction_of(message)
+            phase = getattr(message, "phase", "work")
+            if phase == "download":
+                self.status.emit(f"{name} : {message}", -1.0 if f is None else f, phase)
+            else:
+                overall = (index + (f or 0.0)) / max(1, total) if f is not None else -1.0
+                self.status.emit(f"{name} : {message}", overall, phase)
+        return report
 
     def run(self) -> None:
         db = Database(self.db_path)
         imported = 0
         try:
-            for pdf in self.pdfs:
+            if self.updates is not None:
+                imported = self._run_updates(db)
+                return
+            for index, pdf in enumerate(self.pdfs):
                 if self.cancelled:
                     break
+                self.status.emit(f"{pdf.name} : lecture…", index / max(1, len(self.pdfs)), "work")
                 try:
                     if share.is_share_file(pdf):  # cours partagé : les cartes sont déjà écrites, pas besoin d'IA
                         got = share.import_file(db, pdf, self.subject)
@@ -190,7 +263,7 @@ class ImportWorker(QObject):
                     if self.engine is None:
                         self.engine = make_engine(self.engine_name)
                     res = import_pdf(db, self.engine, pdf, self.subject,
-                                     lambda m, n=pdf.name: self.status.emit(f"{n} : {m}"))
+                                     self._progress(index, len(self.pdfs), pdf.name))
                     if res.skipped:
                         self.file_done.emit(pdf.name, "déjà ajouté", True)
                     else:
@@ -204,6 +277,28 @@ class ImportWorker(QObject):
             self.stop_engine()
             db.close()
             self.all_done.emit(imported)
+
+    def _run_updates(self, db: Database) -> int:
+        done = 0
+        items = list(self.updates.items())
+        for index, (deck_id, path) in enumerate(items):
+            if self.cancelled:
+                break
+            deck = db.deck(deck_id)
+            name = deck_label(deck) if deck else f"cours {deck_id}"
+            self.status.emit(f"{name} : lecture…", index / max(1, len(items)), "work")
+            try:
+                if self.engine is None:
+                    self.engine = make_engine(self.engine_name)
+                res = update_deck(db, self.engine, deck_id, self._progress(index, len(items), name), path)
+                done += 1
+                self.file_done.emit(name, f"{res.kept} cartes gardent ta progression, {res.added} nouvelles, "
+                                          f"{res.removed} retirées", True)
+            except ReviseError as e:
+                self.file_done.emit(name, str(e), False)
+            except Exception as e:  # un cours bizarre ne doit pas arrêter les autres
+                self.file_done.emit(name, f"erreur inattendue : {e}", False)
+        return done
 
 
     def stop_engine(self) -> None:
@@ -221,6 +316,9 @@ class ImportPage(QWidget):
         self._thread: QThread | None = None
         self.worker: ImportWorker | None = None
         self._scanned = False
+        self.scanning = False
+        self.scan_job = Background(self, self._scan_done)
+        self.eta = Eta()
         self.setAcceptDrops(True)
 
         lay = QVBoxLayout(self)
@@ -242,7 +340,8 @@ class ImportPage(QWidget):
         add_btn.setObjectName("primary")
         add_btn.clicked.connect(self.browse)
         self.scan_btn = QPushButton("Chercher sur cet ordinateur")
-        self.scan_btn.setToolTip("Liste les PDF, PowerPoint et Word des dossiers Téléchargements et Documents.")
+        self.scan_btn.setToolTip("Liste les PDF, PowerPoint et Word des dossiers ci-dessous et de tous leurs "
+                                 "sous-dossiers.")
         self.scan_btn.clicked.connect(lambda: self.scan())
         dl.addWidget(drop_text)
         dl.addWidget(muted("ou"))
@@ -250,9 +349,21 @@ class ImportPage(QWidget):
         dl.addWidget(self.scan_btn)
         dl.addStretch(1)
         lay.addWidget(self.drop)
+        self.dirs_label = muted("")
+        self.dirs_btn = QPushButton("Choisir le dossier…")
+        self.dirs_btn.setToolTip("Le dossier où sont tes cours : l'application y cherche aussi dans tous les "
+                                 "sous-dossiers.")
+        self.dirs_btn.clicked.connect(self.choose_dir)
+        self.add_dir_btn = QPushButton("Ajouter un dossier…")
+        self.add_dir_btn.clicked.connect(lambda: self.choose_dir(add=True))
+        self.reset_dirs_btn = QPushButton("Dossiers habituels")
+        self.reset_dirs_btn.setToolTip("Revenir à Téléchargements et Documents.")
+        self.reset_dirs_btn.clicked.connect(self.reset_dirs)
+        lay.addWidget(flow(self.dirs_label, self.dirs_btn, self.add_dir_btn, self.reset_dirs_btn))
+        self._show_dirs()
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Rechercher un fichier dans la liste…")
+        self.search.setPlaceholderText("Rechercher un fichier ou un dossier dans la liste…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._filter)
         self.count_label = muted("")
@@ -339,13 +450,18 @@ class ImportPage(QWidget):
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 1000)
+        self.progress.setTextVisible(True)
+        self.progress.setFormat("%p %")
+        self.progress.setFixedHeight(22)
+        self.eta_label = muted("")
+        self.eta_label.setWordWrap(False)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(110)
         self.log.setVisible(False)
         lay.addWidget(self.progress)
-        lay.addWidget(self.status)
+        lay.addLayout(row(self.status, None, self.eta_label))
         lay.addWidget(self.log)
         self.files.itemChanged.connect(self._update_count)
         self.refresh_subjects()
@@ -368,14 +484,18 @@ class ImportPage(QWidget):
     def _known_paths(self) -> set[str]:
         return {self.files.item(i).data(PATH_ROLE) for i in range(self.files.count())}
 
-    def add_file(self, path: Path, checked: bool = False) -> None:
+    def add_file(self, path: Path, checked: bool = False, folder: str | None = None, done: bool | None = None) -> None:
+        """Ajoute un fichier à la liste. `folder` : où il est (recherche) ; `done` : déjà importé (None = vérifier
+        en lisant le fichier, réservé aux fichiers choisis à la main)."""
         path = path.resolve()
         shared = share.is_share_file(path)
         if str(path) in self._known_paths() or not (shared or documents.is_supported(path)) or not path.is_file():
             return
-        done = not shared and self.db.find_deck_by_hash(file_sha256(path)) is not None
+        if done is None:
+            done = not shared and self.db.find_deck_by_hash(file_sha256(path)) is not None
+        place = folder or guess_subject(path)
         label = path.name + ("   ✓ déjà ajouté" if done else
-                             "   —   cours partagé" if shared else f"   —   {guess_subject(path)}")
+                             "   —   cours partagé" if shared else f"   —   {place}")
         item = QListWidgetItem(label)
         item.setData(PATH_ROLE, str(path))
         item.setToolTip(str(path))
@@ -395,25 +515,74 @@ class ImportPage(QWidget):
             it = self.files.item(i)
             it.setHidden(bool(text) and text not in it.text().lower())
 
+    def _show_dirs(self) -> None:
+        custom = bool(config.load().get("scan_dirs"))
+        dirs = [d for d in scan_dirs() if custom or d.is_dir()]
+        home = Path.home()
+
+        def short(d: Path) -> str:
+            try:
+                return "~/" + str(d.relative_to(home)) if d != home else "~"
+            except ValueError:
+                return str(d)
+        self.dirs_label.setText("Recherche dans : " + ", ".join(short(d) for d in dirs) + " (et leurs sous-dossiers)"
+                                if dirs else "Aucun dossier Téléchargements ou Documents : choisis le dossier de tes cours.")
+        self.reset_dirs_btn.setVisible(custom)
+        self.add_dir_btn.setVisible(custom)
+
+    def choose_dir(self, add: bool = False) -> None:
+        start = str(scan_dirs()[0]) if scan_dirs() and scan_dirs()[0].is_dir() else str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Dossier où sont tes cours", start)
+        if chosen:
+            self.set_dirs([str(d) for d in scan_dirs()] + [chosen] if add and config.load().get("scan_dirs")
+                          else [chosen])
+
+    def set_dirs(self, dirs: list[str] | None) -> None:
+        """Dossiers où chercher (None = les dossiers habituels), puis nouvelle recherche."""
+        config.save({"scan_dirs": list(dict.fromkeys(dirs)) if dirs else []})
+        self._show_dirs()
+        self.scan()
+
+    def reset_dirs(self) -> None:
+        self.set_dirs(None)
+
     def scan(self, search: bool = True) -> None:
-        """Reconstruit la liste : les PDF déjà cochés, puis (si `search`) ceux des dossiers habituels
-        (Téléchargements, Documents), ceux déjà ajoutés en dernier."""
+        """Reconstruit la liste : les fichiers cochés, puis (si `search`) tous ceux des dossiers choisis et de leurs
+        sous-dossiers, ceux déjà ajoutés en dernier. La recherche se fait en arrière-plan."""
         self._scanned = self._scanned or search
+        if not search:
+            self._fill([])
+            return
+        if self.scanning:
+            self._rescan = True  # dossiers changés pendant une recherche : on recommence à la fin
+            return
+        self._rescan = False
+        self.scanning = True
+        self.scan_btn.setEnabled(False)
+        self.count_label.setText("Recherche des cours…")
+        roots = scan_dirs()
+        self.scan_job.start(lambda post: post(find_courses(roots)))
+
+    def _scan_done(self, found: list[tuple[Path, Path]]) -> None:
+        self.scanning = False
+        self.scan_btn.setEnabled(True)
+        if getattr(self, "_rescan", False):
+            self.scan()
+            return
+        self._fill(found)
+        if len(found) >= MAX_FOUND:
+            self.count_label.setText(f"Plus de {MAX_FOUND} fichiers : choisis un dossier plus précis")
+
+    def _fill(self, found: list[tuple[Path, Path]]) -> None:
         self.files.blockSignals(True)
         checked = self.selected_paths()
         self.files.clear()
-        home = Path.home()
-        found: list[Path] = []
-        for d in SEARCH_DIRS if search else []:
-            base = home / d
-            if base.is_dir():
-                found += [p for p in base.rglob("*") if p.suffix.lower() in SCAN_SUFFIXES
-                          and len(p.relative_to(base).parts) <= 3 and not p.name.startswith(("~$", "."))]
-        found = sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)[:300]  # les plus récents
-        for p in reversed(checked):  # les PDF choisis à la main restent, même hors des dossiers habituels
+        sources = {str(Path(d.source)) for d in self.db.decks() if d.source}
+        for p in reversed(checked):  # les fichiers choisis à la main restent, même hors des dossiers fouillés
             self.add_file(p, checked=True)
-        for p in sorted(found, key=lambda p: p.name.lower()):
-            self.add_file(p)
+        # Rangés par dossier, puis par nom : on retrouve un cours même dans un ordinateur en désordre.
+        for p, root in sorted(found, key=lambda pr: (where(*pr).lower(), pr[0].name.lower())):
+            self.add_file(p, folder=where(p, root), done=str(p.resolve()) in sources)
         done = [i for i in range(self.files.count())
                 if not self.files.item(i).flags() & Qt.ItemFlag.ItemIsEnabled]
         for it in [self.files.takeItem(i) for i in reversed(done)][::-1]:
@@ -499,8 +668,12 @@ class ImportPage(QWidget):
         if needs_ai and engine == "en-ligne" and not online.chain() and not self.edit_key():
             return
         config.save({"engine": engine})
-        self.progress.setRange(0, len(pdfs))
         self.progress.setValue(0)
+        self.progress.setFormat("%p %")
+        self.eta.restart()
+        self.eta_label.setText("")
+        self._files_total = len(pdfs)
+        self._files_done = 0
         for w in (self.progress, self.log, self.cancel_btn):
             w.setVisible(True)
         self.log.clear()
@@ -511,7 +684,7 @@ class ImportPage(QWidget):
         self.worker = ImportWorker(Path(self.db.path), pdfs, subject, engine)
         self.worker.moveToThread(self._thread)
         self._thread.started.connect(self.worker.run)
-        self.worker.status.connect(self.status.setText)
+        self.worker.status.connect(self._on_status)
         self.worker.file_done.connect(self._file_done)
         self.worker.all_done.connect(self._all_done)
         self._thread.start()
@@ -522,8 +695,25 @@ class ImportPage(QWidget):
             self.cancel_btn.setEnabled(False)
             self.status.setText("Arrêt après le cours en train d'être lu…")
 
+    def _on_status(self, text: str, fraction: float, phase: str) -> None:
+        self.status.setText(text)
+        if phase == "download":
+            # Téléchargement de l'IA (une seule fois) : la barre montre le téléchargement.
+            self.progress.setFormat("Téléchargement : %p %")
+            if fraction >= 0:
+                self.progress.setValue(int(fraction * 1000))
+            self.eta_label.setText("")
+            self.eta.restart()  # le temps restant de l'import repart après le téléchargement
+            return
+        self.progress.setFormat("%p %")
+        if fraction >= 0:
+            self.progress.setValue(max(self.progress.value(), int(fraction * 1000)))
+            self.eta_label.setText(self.eta.text(fraction))
+
     def _file_done(self, name: str, msg: str, ok: bool) -> None:
-        self.progress.setValue(self.progress.value() + 1)
+        self._files_done = getattr(self, "_files_done", 0) + 1
+        total = max(1, getattr(self, "_files_total", 1))
+        self.progress.setValue(max(self.progress.value(), int(1000 * self._files_done / total)))
         self.log.appendPlainText(f"{'✓' if ok else '✗'} {name} — {msg}")
 
     def _all_done(self, imported: int) -> None:
@@ -533,6 +723,8 @@ class ImportPage(QWidget):
         self.worker = None
         self.cancel_btn.setVisible(False)
         self.cancel_btn.setEnabled(True)
+        self.eta_label.setText("")
+        self.progress.setValue(1000)
         self.status.setText(f"Terminé : {imported} cours ajouté{'s' if imported > 1 else ''}. "
                             "Retrouve-le dans « Mes cours »." if imported else "Terminé.")
         self.scan(search=self._scanned)

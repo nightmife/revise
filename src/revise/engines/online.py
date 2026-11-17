@@ -17,8 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from revise import config, net
-from revise.engines import Progress, distractors
-from revise.engines.prompt import generate_cards
+from revise.engines import Progress, distractors, scaled
+from revise.engines.prompt import TRAPS_START, generate_cards
 from revise.models import CardDraft, ReviseError
 
 KEYLESS = "sans-cle"
@@ -301,8 +301,8 @@ class OnlineEngine:
         self.check()
         self.progress = progress
         label = "IA en ligne"
-        title, cards = generate_cards(pdf, subject, progress, self.chat, label)
-        distractors.add_to_drafts(cards, subject, self.chat, progress, label, self.trap_batch)
+        title, cards = generate_cards(pdf, subject, scaled(progress, 0, TRAPS_START), self.chat, label)
+        distractors.add_to_drafts(cards, subject, self.chat, scaled(progress, TRAPS_START, 1), label, self.trap_batch)
         return title, cards
 
 

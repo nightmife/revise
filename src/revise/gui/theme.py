@@ -1,31 +1,37 @@
-"""Thème sombre de l'application : couleurs, feuille de style, icônes dessinées (aucun fichier image)."""
+"""Thèmes sombre et clair de l'application : couleurs, feuille de style, icônes dessinées (aucun fichier image)."""
 
-SURFACE = "#0f1117"
-PANEL = "#171a24"
-PANEL_2 = "#202433"
-BORDER = "#2b3046"
-TEXT = "#eef0f7"
-MUTED = "#939bb5"
-FAINT = "#5c6380"       # texte désactivé
-ACCENT = "#7b8cff"
-ACCENT_HOVER = "#9aa7ff"
-ACCENT_DIM = "#2a3168"
-VIOLET = "#a984ff"      # seconde teinte des dégradés
-GOOD = "#3ecf8e"
-BAD = "#f0616d"
-WARN = "#f5b84a"
-INK = "#0d1020"         # texte posé sur la couleur d'accent
+DARK = {
+    "SURFACE": "#0f1117", "PANEL": "#171a24", "PANEL_2": "#202433", "BORDER": "#2b3046", "TEXT": "#eef0f7",
+    "MUTED": "#939bb5", "FAINT": "#5c6380", "ACCENT": "#7b8cff", "ACCENT_HOVER": "#9aa7ff", "ACCENT_DIM": "#2a3168",
+    "VIOLET": "#a984ff", "GOOD": "#3ecf8e", "BAD": "#f0616d", "WARN": "#f5b84a", "INK": "#0d1020",
+    "BTN_HOVER": "#2a2f43", "BTN_HOVER_BORDER": "#474d6b", "PRIMARY_OFF_TEXT": "#8f9bc4", "HERO_BTN": "white",
+    "HERO_BTN_TEXT": "#1a1d3a", "HERO_BTN_HOVER": "#e3e7ff", "HERO_BTN_PRESSED": "#c9d0ff",
+    "ACTION_PRIMARY_HOVER": "#34407f", "DROP_BORDER": "#4a5078", "INDICATOR": "#747b94", "INDICATOR_OFF": "#454a5e",
+    "SCROLL_HOVER": "#4a5070", "HERO_BORDER": "#454c9c", "HERO_TEXT": "#c9cffa", "GOOD_BG": "#173527",
+    "BAD_BG": "#3a1c22", "SELECTED_TEXT": "white", "RADIO_DOT": "white", "NAV_ON": "#ffffff",
+    "GRADIENT_END_HOVER": "#bca0ff",
+    "HERO": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #283070, stop:0.6 #2c2a6b, stop:1 #3a2a70)",
+}
+LIGHT = {
+    "SURFACE": "#f4f5fa", "PANEL": "#ffffff", "PANEL_2": "#eceef6", "BORDER": "#d8dbe8", "TEXT": "#1b1e2e",
+    "MUTED": "#5b6280", "FAINT": "#a2a7bb", "ACCENT": "#4b5fe6", "ACCENT_HOVER": "#3446cf", "ACCENT_DIM": "#e0e5ff",
+    "VIOLET": "#8455ec", "GOOD": "#1d8f5a", "BAD": "#cf3442", "WARN": "#a8680f", "INK": "#ffffff",
+    "BTN_HOVER": "#e3e6f2", "BTN_HOVER_BORDER": "#b8bed6", "PRIMARY_OFF_TEXT": "#7d86b0", "HERO_BTN": "white",
+    "HERO_BTN_TEXT": "#26307a", "HERO_BTN_HOVER": "#eef0ff", "HERO_BTN_PRESSED": "#d9ddff",
+    "ACTION_PRIMARY_HOVER": "#d2d9ff", "DROP_BORDER": "#b3b9d4", "INDICATOR": "#8a90a8", "INDICATOR_OFF": "#c8ccd9",
+    "SCROLL_HOVER": "#b3b9d4", "HERO_BORDER": "#3b48b8", "HERO_TEXT": "#e6e9ff", "GOOD_BG": "#dcf3e7",
+    "BAD_BG": "#fbe2e5", "SELECTED_TEXT": "#1b1e2e", "RADIO_DOT": "white", "NAV_ON": "#3446cf",
+    "GRADIENT_END_HOVER": "#7343e0",
+    "HERO": "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3f50d8, stop:0.6 #4a45c9, stop:1 #6a3fcf)",
+}
+MODES = ("sombre", "clair", "automatique")
 
 # Notes de révision : couleur + libellé + raccourci (jamais la couleur seule)
 RATING_COLORS = {1: "#d9434e", 2: "#e0803f", 3: "#2f9e6b", 4: "#4f7df0"}
-# Rampe séquentielle (une teinte, du faible au fort) sur fond sombre
-HEAT = ["#202433", "#2c3f7a", "#3f5cc0", "#7b8cff", "#b9c3ff"]
+HEATS = {"dark": ["#202433", "#2c3f7a", "#3f5cc0", "#7b8cff", "#b9c3ff"],   # rampe séquentielle, une teinte
+         "light": ["#eceef6", "#c9d0ff", "#93a0f3", "#5b6ee8", "#3446cf"]}
 
-GRADIENT = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT}, stop:1 {VIOLET})"
-GRADIENT_HOVER = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_HOVER}, stop:1 #bca0ff)"
-HERO = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #283070, stop:0.6 #2c2a6b, stop:1 #3a2a70)"
-
-QSS = f"""
+QSS_TEMPLATE = """
 * {{ font-size: 11pt; color: {TEXT}; }}
 QMainWindow, QDialog, QWidget#page, QStackedWidget, QScrollArea, QWidget#scrollBody {{ background: {SURFACE}; }}
 QScrollArea {{ border: none; }}
@@ -35,7 +41,7 @@ QLabel#tagline {{ color: {MUTED}; padding: 0 20px 18px 20px; font-size: 9.5pt; }
 QPushButton#nav {{ text-align: left; padding: 11px 14px; border: none; border-radius: 11px; margin: 2px 10px;
                    background: transparent; color: {MUTED}; font-size: 11.5pt; font-weight: 500; }}
 QPushButton#nav:hover {{ background: {PANEL_2}; color: {TEXT}; }}
-QPushButton#nav:checked {{ background: {ACCENT_DIM}; color: white; font-weight: 700; }}
+QPushButton#nav:checked {{ background: {ACCENT_DIM}; color: {SELECTED_TEXT}; font-weight: 700; }}
 QPushButton#nav:disabled {{ color: {FAINT}; background: transparent; }}
 QPushButton#side {{ text-align: left; padding: 7px 16px; border: none; border-radius: 9px; margin: 1px 10px;
                     background: transparent; color: {MUTED}; font-size: 10pt; }}
@@ -60,24 +66,24 @@ QLabel#stepNumber, QFrame#tile QLabel#stepNumber, QFrame#note QLabel#stepNumber 
     background: {ACCENT_DIM}; color: {ACCENT_HOVER}; border-radius: 13px; font-weight: 800;
     min-width: 26px; max-width: 26px; min-height: 26px; max-height: 26px; }}
 QPushButton {{ background: {PANEL_2}; border: 1px solid {BORDER}; border-radius: 10px; padding: 8px 16px; }}
-QPushButton:hover {{ background: #2a2f43; border-color: #474d6b; }}
+QPushButton:hover {{ background: {BTN_HOVER}; border-color: {BTN_HOVER_BORDER}; }}
 QPushButton:pressed {{ background: {ACCENT_DIM}; }}
 QPushButton:focus {{ border-color: {ACCENT}; }}
 QPushButton:disabled {{ color: {FAINT}; background: {PANEL}; border-color: {PANEL_2}; }}
 QPushButton#primary {{ background: {GRADIENT}; border: none; font-weight: 700; color: {INK}; padding: 10px 22px; }}
 QPushButton#primary:hover {{ background: {GRADIENT_HOVER}; }}
-QPushButton#primary:disabled {{ background: {ACCENT_DIM}; color: #8f9bc4; }}
-QPushButton#hero {{ background: white; border: none; border-radius: 14px; color: #1a1d3a; font-size: 13.5pt;
+QPushButton#primary:disabled {{ background: {ACCENT_DIM}; color: {PRIMARY_OFF_TEXT}; }}
+QPushButton#hero {{ background: {HERO_BTN}; border: none; border-radius: 14px; color: {HERO_BTN_TEXT}; font-size: 13.5pt;
                     font-weight: 800; padding: 14px 30px; }}
-QPushButton#hero:hover {{ background: #e3e7ff; }}
-QPushButton#hero:pressed {{ background: #c9d0ff; }}
+QPushButton#hero:hover {{ background: {HERO_BTN_HOVER}; }}
+QPushButton#hero:pressed {{ background: {HERO_BTN_PRESSED}; }}
 QPushButton#link {{ background: transparent; border: none; color: {ACCENT_HOVER}; padding: 4px 2px; font-weight: 600; }}
-QPushButton#link:hover {{ color: white; }}
+QPushButton#link:hover {{ color: {TEXT}; }}
 QPushButton#danger {{ color: {BAD}; }}
 QPushButton#danger:hover {{ border-color: {BAD}; }}
 QTreeWidget, QListWidget, QTableWidget, QPlainTextEdit, QTextBrowser, QComboBox, QSpinBox, QLineEdit {{
     background: {PANEL}; border: 1px solid {BORDER}; border-radius: 12px; padding: 4px;
-    selection-background-color: {ACCENT_DIM}; selection-color: white; }}
+    selection-background-color: {ACCENT_DIM}; selection-color: {SELECTED_TEXT}; }}
 QComboBox, QSpinBox, QLineEdit {{ padding: 7px 10px; border-radius: 10px; }}
 QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus {{ border-color: {ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
@@ -85,38 +91,39 @@ QComboBox QAbstractItemView {{ background: {PANEL}; border: 1px solid {BORDER}; 
     selection-background-color: {ACCENT_DIM}; }}
 QTreeWidget::item, QListWidget::item {{ padding: 8px 4px; border-radius: 7px; }}
 QTreeWidget::item:hover, QListWidget::item:hover {{ background: {PANEL_2}; }}
-QTreeWidget::item:selected, QListWidget::item:selected {{ background: {ACCENT_DIM}; color: white; }}
+QTreeWidget::item:selected, QListWidget::item:selected {{ background: {ACCENT_DIM}; color: {SELECTED_TEXT}; }}
 QHeaderView::section {{ background: {PANEL}; color: {MUTED}; border: none; border-bottom: 1px solid {BORDER};
                         padding: 8px 7px; font-weight: 600; font-size: 10pt; }}
 QTableWidget {{ gridline-color: {BORDER}; }}
 QFrame#card {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 18px; }}
+QFrame#sep {{ background: {BORDER}; border: none; }}
 QFrame#kpi, QFrame#tile {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 16px; }}
 QFrame#kpi QLabel, QFrame#tile QLabel {{ background: transparent; border: none; }}
 QLabel#kpiValue {{ font-size: 21pt; font-weight: 800; color: {ACCENT_HOVER}; }}
 QLabel#tileValue {{ font-size: 20pt; font-weight: 800; }}
 QLabel#tileLabel {{ color: {MUTED}; font-size: 10pt; font-weight: 600; }}
-QFrame#hero {{ background: {HERO}; border: 1px solid #454c9c; border-radius: 22px; }}
+QFrame#hero {{ background: {HERO}; border: 1px solid {HERO_BORDER}; border-radius: 22px; }}
 QFrame#hero QLabel {{ background: transparent; border: none; }}
 QLabel#heroTitle {{ font-size: 21pt; font-weight: 800; color: white; }}
-QLabel#heroText {{ font-size: 12pt; color: #c9cffa; }}
+QLabel#heroText {{ font-size: 12pt; color: {HERO_TEXT}; }}
 QLabel#hello {{ font-size: 25pt; font-weight: 800; }}
 QFrame#choice {{ background: {PANEL}; border: 2px solid {BORDER}; border-radius: 14px; }}
 QFrame#choice:hover {{ border-color: {ACCENT}; background: {PANEL_2}; }}
-QFrame#choice[state="good"] {{ border-color: {GOOD}; background: #173527; }}
-QFrame#choice[state="bad"] {{ border-color: {BAD}; background: #3a1c22; }}
+QFrame#choice[state="good"] {{ border-color: {GOOD}; background: {GOOD_BG}; }}
+QFrame#choice[state="bad"] {{ border-color: {BAD}; background: {BAD_BG}; }}
 QFrame#choice[state="off"] {{ border-color: {BORDER}; background: {PANEL}; }}
 QFrame#choice QLabel {{ background: transparent; border: none; }}
 QLabel#choiceKey {{ color: {MUTED}; font-weight: 700; }}
 QFrame#action {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 14px; }}
 QFrame#action:hover, QFrame#action:focus {{ border-color: {ACCENT}; background: {PANEL_2}; }}
 QFrame#action[primary="true"] {{ background: {ACCENT_DIM}; border-color: {ACCENT}; }}
-QFrame#action[primary="true"]:hover, QFrame#action[primary="true"]:focus {{ background: #34407f; }}
+QFrame#action[primary="true"]:hover, QFrame#action[primary="true"]:focus {{ background: {ACTION_PRIMARY_HOVER}; }}
 QFrame#action:disabled {{ background: {SURFACE}; border-color: {PANEL_2}; }}
 QFrame#action QLabel {{ background: transparent; border: none; }}
 QLabel#actionTitle {{ font-size: 12.5pt; font-weight: 700; }}
 QLabel#actionText {{ color: {MUTED}; font-size: 10pt; }}
 QLabel#actionTitle:disabled, QLabel#actionText:disabled {{ color: {FAINT}; }}
-QFrame#drop {{ background: {PANEL}; border: 2px dashed #4a5078; border-radius: 16px; }}
+QFrame#drop {{ background: {PANEL}; border: 2px dashed {DROP_BORDER}; border-radius: 16px; }}
 QFrame#drop[active="true"] {{ border-color: {ACCENT}; background: {PANEL_2}; }}
 QFrame#drop QLabel {{ background: transparent; border: none; }}
 QFrame#note {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 14px; }}
@@ -126,20 +133,20 @@ QProgressBar {{ background: {PANEL_2}; border: none; border-radius: 4px; height:
 QProgressBar::chunk {{ background: {GRADIENT}; border-radius: 4px; }}
 QRadioButton, QCheckBox {{ spacing: 8px; padding: 3px 0; }}
 QCheckBox::indicator, QTreeWidget::indicator, QListWidget::indicator, QRadioButton::indicator {{
-    width: 16px; height: 16px; border: 2px solid #747b94; background: {SURFACE}; border-radius: 5px; }}
+    width: 16px; height: 16px; border: 2px solid {INDICATOR}; background: {SURFACE}; border-radius: 5px; }}
 QRadioButton::indicator {{ border-radius: 10px; }}
 QCheckBox::indicator:hover, QTreeWidget::indicator:hover, QListWidget::indicator:hover,
 QRadioButton::indicator:hover {{ border-color: {ACCENT_HOVER}; }}
 QCheckBox::indicator:checked, QTreeWidget::indicator:checked, QListWidget::indicator:checked {{
     background: {ACCENT}; border-color: {ACCENT}; image: none; }}
 QTreeWidget::indicator:indeterminate {{ background: {ACCENT_DIM}; border-color: {ACCENT}; }}
-QRadioButton::indicator:checked {{ width: 8px; height: 8px; background: white; border: 6px solid {ACCENT};
+QRadioButton::indicator:checked {{ width: 8px; height: 8px; background: {RADIO_DOT}; border: 6px solid {ACCENT};
     border-radius: 10px; }}
-QRadioButton::indicator:disabled, QCheckBox::indicator:disabled {{ border-color: #454a5e; }}
+QRadioButton::indicator:disabled, QCheckBox::indicator:disabled {{ border-color: {INDICATOR_OFF}; }}
 QRadioButton:disabled {{ color: {FAINT}; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 4px; min-height: 30px; }}
-QScrollBar::handle:vertical:hover {{ background: #4a5070; }}
+QScrollBar::handle:vertical:hover {{ background: {SCROLL_HOVER}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: {BORDER}; border-radius: 4px; min-width: 30px; }}
@@ -147,6 +154,50 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 QSplitter::handle {{ background: transparent; }}
 QToolTip {{ background: {PANEL_2}; color: {TEXT}; border: 1px solid {BORDER}; padding: 6px 8px; border-radius: 7px; }}
 """
+
+current = "dark"
+QSS = ""
+
+
+def system_is_dark() -> bool:
+    """Le système est réglé en mode sombre (inconnu = sombre, l'apparence historique de l'application)."""
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        scheme = QGuiApplication.styleHints().colorScheme()
+        return scheme != Qt.ColorScheme.Light
+    except Exception:
+        return True
+
+
+def resolve(mode: str | None) -> str:
+    """« sombre » / « clair » / « automatique » (suit le système) → "dark" ou "light"."""
+    if mode == "clair":
+        return "light"
+    if mode == "automatique":
+        return "dark" if system_is_dark() else "light"
+    return "dark"
+
+
+def is_dark() -> bool:
+    return current == "dark"
+
+
+def apply(kind: str) -> str:
+    """Met en place la palette "dark" ou "light" (couleurs du module et feuille de style) ; renvoie la QSS."""
+    global current, QSS, HEAT, GRADIENT, GRADIENT_HOVER
+    current = "light" if kind == "light" else "dark"
+    palette = LIGHT if current == "light" else DARK
+    globals().update(palette)
+    HEAT = HEATS[current]
+    GRADIENT = f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {palette['ACCENT']}, stop:1 {palette['VIOLET']})"
+    GRADIENT_HOVER = (f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {palette['ACCENT_HOVER']}, "
+                      f"stop:1 {palette['GRADIENT_END_HOVER']})")
+    QSS = QSS_TEMPLATE.format(**palette, GRADIENT=GRADIENT, GRADIENT_HOVER=GRADIENT_HOVER)
+    return QSS
+
+
+apply("dark")
 
 
 def nav_icon(name: str, size: int = 20):
@@ -187,6 +238,11 @@ def nav_icon(name: str, size: int = 20):
             for y in (5.5, 10, 14.5):
                 p.drawEllipse(QPointF(5, y), 1.5, 1.5)
                 p.drawLine(QPointF(9, y), QPointF(16.5, y))
+        elif name == "exam":
+            p.drawEllipse(QPointF(10, 11), 6.5, 6.5)
+            p.drawLine(QPointF(10, 11), QPointF(10, 7.5))
+            p.drawLine(QPointF(10, 11), QPointF(12.5, 12.5))
+            p.drawLine(QPointF(8.5, 2.8), QPointF(11.5, 2.8))
         elif name == "stats":
             for x, top in ((5, 11), (10, 6), (15, 9)):
                 p.drawLine(QPointF(x, 16), QPointF(x, top))
@@ -195,7 +251,7 @@ def nav_icon(name: str, size: int = 20):
 
     icon = QIcon()
     icon.addPixmap(draw(MUTED), QIcon.Mode.Normal, QIcon.State.Off)
-    icon.addPixmap(draw("#ffffff"), QIcon.Mode.Normal, QIcon.State.On)
+    icon.addPixmap(draw(NAV_ON), QIcon.Mode.Normal, QIcon.State.On)
     icon.addPixmap(draw(FAINT), QIcon.Mode.Disabled, QIcon.State.Off)
     return icon
 

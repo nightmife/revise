@@ -10,10 +10,13 @@ from revise.db import Database
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings(tmp_path: Path, monkeypatch):
+def isolated_settings(tmp_path: Path, tmp_path_factory, monkeypatch):
     """Les tests ne lisent ni n'écrivent les réglages et les données de l'utilisateur."""
     monkeypatch.setenv("REVISE_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    home = tmp_path_factory.mktemp("home")   # la recherche de cours ne fouille pas le vrai dossier personnel
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     for var in ("REVISE_CLE_API", "REVISE_IA_MODELE", "REVISE_DB"):
         monkeypatch.delenv(var, raising=False)
 

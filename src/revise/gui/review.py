@@ -7,14 +7,19 @@ import time
 from fsrs import Rating
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QFrame, QLabel, QPlainTextEdit,
-                               QProgressBar, QPushButton, QSpinBox, QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QFrame, QLabel, QLineEdit,
+                               QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTextBrowser, QVBoxLayout,
+                               QWidget)
 
+from revise import config, pageview
+from revise.answercheck import CLOSE, EMPTY, GOOD, check_answer
 from revise.db import Card, Database, deck_label, utcnow
 from revise.engines import distractors
 from revise.engines.explain import explain
+from revise.engines.rewrite import rewrite
 from revise.gui import theme
-from revise.gui.common import Background, confirm, muted, row, save_cancel_buttons
+from revise.gui.common import Background, cloze_question, confirm, muted, row, save_cancel_buttons
+from revise.importer import source_file
 from revise.gui.render import show_markdown
 from revise.models import KINDS, ReviseError
 from revise.scheduler import RATING_LABELS, Session, format_interval, preview
@@ -60,6 +65,31 @@ class CardEditDialog(QDialog):
                 self.page.value() or None)
 
 
+class RewriteDialog(QDialog):
+    """Ancienne et nouvelle version d'une carte, côte à côte : l'utilisateur garde celle qu'il veut."""
+
+    def __init__(self, card: Card, question: str, answer: str, change: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Nouvelle version de la carte")
+        self.resize(760, 560)
+        lay = QVBoxLayout(self)
+        if change:
+            lay.addWidget(muted(f"Ce que l'IA a corrigé : {change}"))
+        for title, q, a in (("Avant", card.question, card.answer), ("Proposée par l'IA", question, answer)):
+            head = QLabel(title)
+            head.setObjectName("section")
+            lay.addWidget(head)
+            view = markdown_view(12)
+            show_markdown(view, f"**{cloze_question(q)}**\n\n{a}")
+            lay.addWidget(view, 1)
+        keep_old = QPushButton("Garder l'ancienne")
+        keep_old.clicked.connect(self.reject)
+        keep_new = QPushButton("Garder la nouvelle")
+        keep_new.setObjectName("primary")
+        keep_new.clicked.connect(self.accept)
+        lay.addLayout(row(None, keep_old, keep_new))
+
+
 def markdown_view(size: float) -> QTextBrowser:
     v = QTextBrowser()
     v.setOpenExternalLinks(True)
@@ -90,7 +120,8 @@ class ReviewPage(QWidget):
         self.engine = None
         self.ai_busy = False
         self._request = 0  # change à chaque carte : une explication arrivée trop tard est ignorée
-        self.ai_job = Background(self, lambda message: self._on_explained(*message))
+        self.ai_job = Background(self, self._on_ai)
+        self.verdict: str | None = None  # correction de la réponse tapée
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 20, 28, 20)
@@ -101,7 +132,12 @@ class ReviewPage(QWidget):
         quit_btn = QPushButton("Terminer")
         quit_btn.setToolTip("Échap")
         quit_btn.clicked.connect(self.finished.emit)
-        lay.addLayout(row(self.where, None, quit_btn))
+        self.type_toggle = QCheckBox("Écrire mes réponses")
+        self.type_toggle.setToolTip("Tape ta réponse avant de la voir : l'application la compare à celle de la carte "
+                                    "et te propose une note.")
+        self.type_toggle.setChecked(bool(config.load().get("type_answers", False)))
+        self.type_toggle.toggled.connect(self._toggle_typing)
+        lay.addLayout(row(self.where, None, self.type_toggle, quit_btn))
         lay.addWidget(self.counts)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
@@ -117,8 +153,8 @@ class ReviewPage(QWidget):
         self.question = markdown_view(18)
         cl.addWidget(self.question, 4)
         self.sep = QFrame()
-        self.sep.setFrameShape(QFrame.Shape.HLine)
-        self.sep.setStyleSheet(f"color: {theme.BORDER};")
+        self.sep.setObjectName("sep")
+        self.sep.setFixedHeight(1)
         cl.addWidget(self.sep)
         self.answer = markdown_view(15)
         cl.addWidget(self.answer, 4)
@@ -129,6 +165,15 @@ class ReviewPage(QWidget):
         self.explanation.setVisible(False)
         cl.addWidget(self.explanation, 3)
         lay.addWidget(self.card_frame, 1)
+        self.typed = QLineEdit()
+        self.typed.setPlaceholderText("Écris ta réponse ici, puis Entrée pour la vérifier")
+        self.typed.returnPressed.connect(self.reveal)
+        self.typed.setMinimumHeight(42)
+        lay.addWidget(self.typed)
+        self.check_label = QLabel()
+        self.check_label.setTextFormat(Qt.TextFormat.RichText)
+        self.check_label.setWordWrap(True)
+        lay.addWidget(self.check_label)
 
         self.reveal_btn = QPushButton("Afficher la réponse  (Espace)")
         self.reveal_btn.setObjectName("primary")
@@ -161,27 +206,57 @@ class ReviewPage(QWidget):
         self.explain_btn = QPushButton("Explique-moi")
         self.explain_btn.setToolTip("L'IA explique cette réponse avec d'autres mots et un exemple (touche X).")
         self.explain_btn.clicked.connect(self.explain)
+        self.page_btn = QPushButton("Voir la page du cours")
+        self.page_btn.setToolTip("La page du cours d'où vient cette carte (touche P).")
+        self.page_btn.clicked.connect(self.show_page)
+        self.fix_btn = QPushButton("Carte mal faite ?")
+        self.fix_btn.setToolTip("L'IA réécrit la carte à partir de la page du cours ; tu choisis la version à garder "
+                                "(touche R).")
+        self.fix_btn.clicked.connect(self.fix)
         self.back_btn = QPushButton("Retour")
         self.where.setMinimumWidth(10)
         self.back_btn.setObjectName("primary")
         self.back_btn.clicked.connect(self.finished.emit)
-        lay.addLayout(row(self.edit_btn, self.suspend_btn, self.explain_btn, None, self.back_btn))
+        lay.addLayout(row(self.edit_btn, self.suspend_btn, self.page_btn, self.fix_btn, self.explain_btn, None,
+                          self.back_btn))
 
         # Raccourcis actifs seulement quand la page de révision a le focus.
         ctx = Qt.ShortcutContext.WidgetWithChildrenShortcut
         for key, fn in (("Space", self.reveal), ("Return", self.reveal), ("E", self.edit), ("S", self.suspend),
-                        ("X", self.explain), ("Escape", self.finished.emit)):
+                        ("X", self.explain), ("P", self.show_page), ("R", self.fix), ("Escape", self.finished.emit)):
             QShortcut(QKeySequence(key), self, activated=fn, context=ctx)
         for v in range(1, 5):
             QShortcut(QKeySequence(str(v)), self, activated=lambda v=v: self.rate(v), context=ctx)
         for w in (self.question, self.answer, self.explanation):
             w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.typed.installEventFilter(self)  # pendant qu'on tape, les lettres ne sont pas des raccourcis
+
+    def eventFilter(self, obj, event) -> bool:
+        from PySide6.QtCore import QEvent
+        if obj is self.typed and event.type() == QEvent.Type.ShortcutOverride and event.key() != Qt.Key.Key_Escape:
+            event.accept()  # la touche va au champ de texte, pas au raccourci
+            return True
+        return super().eventFilter(obj, event)
+
+    def typing(self) -> bool:
+        return self.type_toggle.isChecked()
+
+    def _toggle_typing(self, on: bool) -> None:
+        config.save({"type_answers": on})
+        if self.card is not None and not self.revealed:
+            self.typed.setVisible(on)
+            if on:
+                self.typed.setFocus()
+            else:
+                self.setFocus()
 
     # ----------------------------------------------------------------- séance
-    def start(self, deck_ids: list[int], exam: bool, include_known: bool, new_per_day: int) -> None:
+    def start(self, deck_ids: list[int], exam: bool, include_known: bool, new_per_day: int,
+              card_ids: list[int] | None = None) -> None:
         self.exam = exam
-        self.session = Session(self.db, None, new_per_day, deck_ids=deck_ids, cram=exam, include_known=include_known)
+        self.session = Session(self.db, None, new_per_day, deck_ids=deck_ids, cram=exam, include_known=include_known,
+                               card_ids=card_ids)
         self.total = self.session.remaining
         self.started = time.monotonic()
         self.labels = {d.id: deck_label(d) for d in self.db.decks()}
@@ -224,8 +299,14 @@ class ReviewPage(QWidget):
         self.explanation.setVisible(False)
         self.explain_btn.setVisible(False)
         has = self.card is not None
-        for w in (self.edit_btn, self.suspend_btn):
+        for w in (self.edit_btn, self.suspend_btn, self.fix_btn):
             w.setVisible(has)
+        self.page_btn.setVisible(has and bool(self.card.page))
+        self.typed.clear()
+        self.typed.setReadOnly(False)
+        self.typed.setVisible(has and self.typing())
+        self.check_label.setVisible(False)
+        self.verdict = None
         self.back_btn.setVisible(not has)
         if not has:
             self._show_rating(False)
@@ -241,6 +322,8 @@ class ReviewPage(QWidget):
         self._show_rating(False)
         self.update_counts()
         self.shown_at = time.monotonic()
+        if self.typing() and self.isVisible():
+            self.typed.setFocus()
 
     def reveal(self) -> None:
         if self.card is None or self.revealed or not self.isVisible():
@@ -250,58 +333,134 @@ class ReviewPage(QWidget):
         show_markdown(self.answer, self.card.answer)
         self.answer.setVisible(True)
         self.sep.setVisible(True)
+        self._check_typed()
         iv = preview(self.session.scheduler, self.card, utcnow())
+        suggested = {GOOD: 3, CLOSE: 2}.get(self.verdict, 1) if self.verdict not in (None, EMPTY) else None
         for r in Rating:
-            self.rate_btns[int(r)].setText(f"{RATING_LABELS[r]}\nrevient dans {format_interval(iv[r])}")
+            mark = "  ✓ conseillé" if int(r) == suggested else ""
+            self.rate_btns[int(r)].setText(f"{RATING_LABELS[r]}{mark}\nrevient dans {format_interval(iv[r])}")
             self.rate_btns[int(r)].setToolTip(f"Touche {int(r)}")
         self._show_rating(True)
+        self.setFocus()  # les touches 1 à 4 notent la carte
         self.explain_btn.setVisible(True)
         self.explain_btn.setEnabled(not self.ai_busy)
 
-    # ------------------------------------------------------------ explication
-    def explain(self) -> None:
-        """Demande à l'IA d'expliquer la réponse affichée (dans un fil : la page reste utilisable)."""
-        if self.card is None or not self.revealed or not self.isVisible() or self.ai_busy:
+    # -------------------------------------------------------------- réponse tapée
+    def _check_typed(self) -> None:
+        """Compare la réponse écrite à celle de la carte (sans IA) et affiche le résultat."""
+        if not self.typing() or self.card is None:
             return
+        typed = self.typed.text()
+        self.typed.setReadOnly(True)
+        result = check_answer(typed, self.card.answer, self.card.kind)
+        self.verdict = result.verdict
+        if result.verdict == EMPTY:
+            text = f"<span style='color:{theme.MUTED}'>Pas de réponse écrite : compare dans ta tête.</span>"
+        elif result.verdict == GOOD:
+            text = f"<span style='color:{theme.GOOD}'><b>✓ Juste</b></span> — vérifie quand même la réponse ci-dessus."
+        elif result.verdict == CLOSE:
+            miss = ", ".join(result.missing[:6])
+            text = (f"<span style='color:{theme.WARN}'><b>≈ Presque</b></span>"
+                    + (f" — il manque : <i>{miss}</i>" if miss else ""))
+        else:
+            text = f"<span style='color:{theme.BAD}'><b>✗ Pas tout à fait</b></span> — relis bien la réponse."
+        self.check_label.setText(text + f" <span style='color:{theme.MUTED}'>(La note reste ton choix.)</span>")
+        self.check_label.setVisible(True)
+
+    # ------------------------------------------------------- IA : explication, réécriture
+    def _ai_ready(self, title: str) -> bool:
+        """Faux si l'IA de cet ordinateur doit d'abord être téléchargée et que l'utilisateur refuse."""
         if self.engine is None and self.engine_factory is distractors.default_engine \
                 and distractors.default_engine_name() == "ia":
             from revise.engines import embedded
             if not embedded.installed() and not confirm(
-                    self, "Explique-moi", "L'explication est écrite par l'IA de cet ordinateur, qui n'est pas encore "
-                    "installée : il faut d'abord la télécharger (2,5 à 7 Go).\n\nTu peux aussi choisir une autre IA "
-                    "dans « Ajouter un cours ».", "Télécharger"):
-                return
+                    self, title, "L'IA de cet ordinateur n'est pas encore installée : il faut d'abord la télécharger "
+                    "(2,5 à 7 Go).\n\nTu peux aussi choisir une autre IA dans « Ajouter un cours ».", "Télécharger"):
+                return False
+        return True
+
+    def _run_ai(self, kind: str, task) -> None:
+        """Lance `task(chat)` dans un fil ; le résultat revient dans `_on_ai` avec `kind`."""
         self.ai_busy = True
         self.explain_btn.setEnabled(False)
-        self.explanation.setMarkdown("*L'IA réfléchit…*")
-        self.explanation.setVisible(True)
-        request, card = self._request, self.card
-        subject, course = self.subjects.get(card.deck_id, ""), self.labels.get(card.deck_id, "")
+        self.fix_btn.setEnabled(False)
+        request = self._request
 
         def work(post) -> None:
             try:
                 if self.engine is None:
                     self.engine = self.engine_factory()
                 getattr(self.engine, "check", lambda: None)()
-                self.engine.progress = lambda message: post((request, f"*{message}*", False))
-                text = explain(card.question, card.answer, subject, course, self.engine.chat)
-                post((request, text, True))
+                self.engine.progress = lambda message: post((request, kind, f"*{message}*", False))
+                post((request, kind, task(self.engine.chat), True))
             except ReviseError as e:
-                post((request, f"**Pas d'explication** : {e}", True))
+                post((request, kind, e, True))
             except Exception as e:  # une panne de l'IA ne doit pas fermer l'application
-                post((request, f"**Pas d'explication** : erreur inattendue ({e})", True))
+                post((request, kind, ReviseError(f"erreur inattendue ({e})"), True))
         self.ai_job.start(work)
 
-    def _on_explained(self, request: int, text: str, final: bool) -> None:
+    def explain(self) -> None:
+        """Demande à l'IA d'expliquer la réponse affichée (dans un fil : la page reste utilisable)."""
+        if self.card is None or not self.revealed or not self.isVisible() or self.ai_busy:
+            return
+        if not self._ai_ready("Explique-moi"):
+            return
+        self.explanation.setMarkdown("*L'IA réfléchit…*")
+        self.explanation.setVisible(True)
+        card = self.card
+        subject, course = self.subjects.get(card.deck_id, ""), self.labels.get(card.deck_id, "")
+        self._run_ai("explain", lambda chat: explain(card.question, card.answer, subject, course, chat))
+
+    def fix(self) -> None:
+        """« Carte mal faite ? » : l'IA propose une nouvelle version, l'utilisateur choisit."""
+        if self.card is None or not self.isVisible() or self.ai_busy:
+            return
+        if not self._ai_ready("Carte mal faite ?"):
+            return
+        card = self.card
+        deck = self.db.deck(card.deck_id)
+        path = source_file(deck) if deck else None
+        page_text = pageview.page_text(path, card.page) if path and card.page else ""
+        subject, course = self.subjects.get(card.deck_id, ""), self.labels.get(card.deck_id, "")
+        self.explanation.setMarkdown("*L'IA réécrit la carte…*")
+        self.explanation.setVisible(True)
+        self._run_ai("fix", lambda chat: rewrite(card.question, card.answer, page_text, subject, course, chat))
+
+    def _on_ai(self, message) -> None:
+        request, kind, result, final = message
         if final:
             self.ai_busy = False
             self.explain_btn.setEnabled(True)
+            self.fix_btn.setEnabled(True)
         if request != self._request:  # l'utilisateur est déjà passé à une autre carte
             return
-        if final:
-            show_markdown(self.explanation, f"**Explication de l'IA**\n\n{text}")
+        if not final:
+            self.explanation.setMarkdown(result)
+            return
+        if isinstance(result, ReviseError):
+            show_markdown(self.explanation, f"**{'Pas d’explication' if kind == 'explain' else 'Pas de nouvelle version'}**"
+                                            f" : {result}")
+        elif kind == "explain":
+            show_markdown(self.explanation, f"**Explication de l'IA**\n\n{result}")
         else:
-            self.explanation.setMarkdown(text)
+            self.explanation.setVisible(False)
+            self.offer_rewrite(*result)
+
+    def offer_rewrite(self, question: str, answer: str, change: str) -> None:
+        if self.card is None:
+            return
+        dlg = RewriteDialog(self.card, question, answer, change, self)
+        if dlg.exec():
+            self.db.update_card_content(self.card.id, self.card.kind, question, answer, self.card.page)
+            self._reload_card()
+
+    def show_page(self) -> None:
+        if self.card is None or not self.card.page or not self.isVisible():
+            return
+        deck = self.db.deck(self.card.deck_id)
+        if deck is not None:
+            from revise.gui.page_dialog import PageDialog
+            PageDialog(self.db, deck, self.card.page, self).exec()
 
     def stop_engine(self) -> None:
         """Arrête l'IA lancée pour les explications (sans effet s'il n'y en a pas)."""
@@ -329,13 +488,16 @@ class ReviewPage(QWidget):
         if dlg.exec():
             kind, q, a, page = dlg.values()
             self.db.update_card_content(self.card.id, kind, q, a, page)
-            self.session.refresh(self.card.id)
-            fresh = self.db.card(self.card.id)
-            self.card = fresh
-            if fresh:
-                show_markdown(self.question, fresh.question)
-                if self.revealed:
-                    show_markdown(self.answer, fresh.answer)
+            self._reload_card()
+
+    def _reload_card(self) -> None:
+        self.session.refresh(self.card.id)
+        fresh = self.db.card(self.card.id)
+        self.card = fresh
+        if fresh:
+            show_markdown(self.question, cloze_question(fresh.question))
+            if self.revealed:
+                show_markdown(self.answer, fresh.answer)
 
     def finish(self) -> None:
         minutes = (time.monotonic() - self.started) / 60

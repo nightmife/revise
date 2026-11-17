@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "revise"
-version = "0.8.0"
+version = "0.9.0"
 description = "Révision espacée (FSRS) à partir de CM en PDF"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,6 +14,7 @@ dependencies = [
     "fsrs>=6.3,<7",
     "PySide6-Essentials>=6.6",
     "certifi",
+    "pypdfium2>=4",   # image des pages du cours (facultatif : sans lui, le texte de la page est montré)
 ]
 
 [project.optional-dependencies]

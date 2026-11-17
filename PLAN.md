@@ -16,6 +16,7 @@ plus une ligne de commande. Carte détaillée du code : `CLAUDE.md`.
 | `scheduler.py` | planification FSRS (bibliothèque `fsrs`), file de révision, limite de nouvelles cartes |
 | `engines/claude_code.py` | IA de l'abonnement Claude via Claude Code (`claude -p`), modèle au choix |
 | `engines/distractors.py` | propositions des QCM écrites par l'IA, toutes de la même longueur (à l'import ou après coup) |
+| `answercheck.py`, `weak.py`, `mock_exam.py`, `matching.py`, `pageview.py` | réponse tapée corrigée, points faibles, examen blanc, rapprochement des cartes d'un cours refait, page du cours |
 | `quiz.py` | QCM : bonne réponse réécrite + réponses pièges de l'IA, sinon réponses de cartes ressemblantes |
 | `gui/` | application Qt : accueil, cours, fiches, QCM, import, révision, statistiques (pages qui défilent) |
 | `tui.py` | séance de révision (Textual) |
@@ -33,3 +34,6 @@ plus une ligne de commande. Carte détaillée du code : `CLAUDE.md`.
 7. Application Qt, exécutables Windows/Mac (GitHub Actions), mise à jour automatique (0.4 → 0.6)
 8. Accueil « Aujourd'hui », interface refaite (0.7)
 9. Pages qui défilent, QCM aux propositions équilibrées, choix du modèle Claude, IA en ligne multi-clés et sans clé (0.8)
+10. Moteur sans IA refait, pages nettoyées avant l'IA, reprise d'import, barre d'avancement, mise à jour des cours
+    sans perte, recherche dans un dossier choisi, réponses tapées, page du cours, carte réécrite, examen blanc,
+    points faibles, thème clair (0.9)
