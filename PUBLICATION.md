@@ -1,15 +1,51 @@
 # Publication de revise 1.0.0 (vente sur Payhip)
 
-État au 18/11/2026. La liste dans l'ordre est plus bas, section « Étapes dans l'ordre ».
+État au 18/11/2026, 17 h. Reprendre à la section « Reste à faire ».
 
 ## Où on en est
 
-**Fait (code)**
-- Licence par clé dans les exécutables : `src/revise/licence.py`, fenêtre `src/revise/gui/licence_dialog.py`, 20 tests dans `tests/test_licence.py` (214 au total, tous verts).
-- Version passée à **1.0.0** (`pyproject.toml`, `src/revise/__init__.py`).
-- Commits locaux `27f8027` (licence Gumroad, abandonnée) et `c1bde76` (passage à Payhip).
-- `27f8027` est **déjà poussé** sur GitHub. `c1bde76` ne l'est **pas encore**.
-- Aucun tag `v1.0.0`, aucune Release 1.0.0 : les utilisateurs actuels (0.9) ne voient encore aucune mise à jour.
+**Fait**
+- Code : licence par clé (`src/revise/licence.py`, fenêtre `gui/licence_dialog.py`), version **1.0.0**, 214 tests verts. Tout est poussé sur `master` (dernier commit de code : `9acd84b`).
+- `BUY_URL` = **https://payhip.com/b/8XCQ2**, déjà dans le code.
+- Secret GitHub **`PAYHIP_SECRET`** enregistré (mis à jour le 18/11 à 15:38:45). Le job Windows l'a bien trouvé.
+- Payhip :
+  - compte créé, **PayPal (compte Particulier) connecté**, devise EUR, libellé bancaire `REVISE` ;
+  - produit **revise** créé à 3 €, clés de licence activées, **invisible (HIDDEN)** ;
+  - fichier provisoire = la thumbnail (à remplacer) ;
+  - pas d'option de prix libre trouvée à la création : à revérifier dans Edit.
+- **Coupons à 100 %** (1 utilisation chacun) créés dans Marketing → Coupons, dont un pour l'essai. **Pas encore envoyés.**
+- Construction sans Release (`workflow_dispatch`), run **44338165088** :
+  - `revise.exe` et `revise-mac-intel.dmg` sont prêts dans `~/Downloads/revise-1.0.0/` ;
+  - **`revise-mac-arm64.dmg` (Mac puce Apple) manque.** Le job `macos-15` est resté en file d'attente chez GitHub et a été annulé au bout de 15 min. Il a été relancé (`gh run rerun 44338165088 --failed`).
+- Aucun tag `v1.0.0`, aucune Release 1.0.0 : les utilisateurs 0.9 ne voient rien.
+
+**Pas encore fait** : essai avec une vraie clé, dépôt des vrais fichiers sur Payhip, publication du produit, envoi des coupons, tag.
+
+## Reste à faire
+
+1. **Récupérer le .dmg puce Apple.**
+   ```
+   ! cd ~/claudeCode/revise && gh run view 44338165088 --json jobs --jq '.jobs[] | "\(.name): \(.status) \(.conclusion)"'
+   ! cd ~/claudeCode/revise && gh run download 44338165088 -n revise-mac-arm64 -D ~/Downloads/revise-1.0.0
+   ```
+   - Si le job est encore annulé, relancer avec `gh run rerun 44338165088 --failed`.
+   - Ou lancer une nouvelle construction complète avec `gh workflow run release.yml --ref master`, puis télécharger les fichiers du nouveau run.
+   - Ce n'est pas un bug du code : la machine `macos-15` a marché le 17/11 à 18:10 et le 18/11 à 01:42.
+2. **Essai avec une vraie clé**, avant toute vente :
+   - « acheter » revise avec ton coupon d'essai (le produit doit être visible ou accessible par lien, sinon le passer en Unlisted le temps de l'essai) ;
+   - lancer `revise.exe` sur un Windows et coller la clé reçue : l'app doit s'ouvrir ;
+   - sur un 2e ordinateur, la même clé doit être refusée (« déjà activée ») ;
+   - libérer ensuite la clé avec la commande `decrease` (section « Commandes utiles »).
+3. **Payhip** :
+   - remplacer le fichier provisoire par `revise.exe` + `revise-mac-arm64.dmg`. La version Intel est facultative : si tu ne la mets pas, enlever la ligne « Mac Intel » des textes ;
+   - vérifier le prix libre dans Edit ;
+   - passer le produit en **Visible**.
+4. **Envoyer les coupons** aux personnes qui ont déjà l'app.
+5. **Tag**, uniquement après l'étape 4 :
+   ```
+   ! cd ~/claudeCode/revise && git tag v1.0.0 && GIT_SSH_COMMAND="ssh -6" git push origin v1.0.0
+   ```
+   Si le Mac puce Apple bloque encore pendant ce build, la Release est quand même publiée (`publication` ne dépend que de Windows). Ajouter le `.dmg` ensuite : `gh release upload v1.0.0 ~/Downloads/revise-1.0.0/revise-mac-arm64.dmg`.
 
 **Choix arrêtés**
 - Plateforme : **Payhip**, pas Gumroad. Gumroad ne verse rien sous 100 $ pour la France, ce qui fait environ 50 ventes.
@@ -24,39 +60,11 @@
 - L'**adresse de la page de vente** Payhip, à mettre dans `BUY_URL` dans `src/revise/licence.py`.
 - Sans ces deux éléments, le build GitHub échoue volontairement, pour ne jamais publier une version gratuite par erreur.
 
-## Étapes dans l'ordre
+## Détail des étapes (référence)
 
-1. **Payhip : compte.** Créer le compte et connecter **PayPal ou Stripe** pour recevoir l'argent.
-2. **Payhip : produit numérique.**
-   - Nom `revise`, prix **3 €**, prix libre activé (minimum 3 €).
-   - Description, cover et thumbnail : voir plus bas.
-   - Cocher **« Generate unique license keys »**.
-   - **Ne pas publier encore** si Payhip permet de laisser le produit en brouillon. Sinon, ne pas partager le lien.
-3. **Secret GitHub.** La clé secrète du produit apparaît sous la case des licences une fois le produit créé.
-   ```
-   ! cd ~/claudeCode/revise && gh secret set PAYHIP_SECRET
-   ```
-   La commande demande la clé : la coller. Elle part sur GitHub sans s'afficher.
-4. **`BUY_URL`.** Donner l'adresse de la page à Claude. Il la met dans `licence.py`, lance les tests et commite.
-5. **Envoyer le code et construire les fichiers, sans Release.**
-   ```
-   ! cd ~/claudeCode/revise && GIT_SSH_COMMAND="ssh -6" git push origin master && gh workflow run release.yml --ref master
-   ```
-   - Lancée à la main (`workflow_dispatch`), la construction fabrique les fichiers sans publier de Release : personne ne reçoit de mise à jour.
-   - Compter 20 à 30 minutes.
-   - Claude surveille avec `gh run watch`, puis télécharge les 3 fichiers avec `gh run download <id>` dans `~/Downloads/revise-1.0.0/`.
-6. **Essayer pour de vrai avant de vendre.**
-   - Créer un code de réduction à 100 % et « acheter » soi-même.
-   - Lancer le `.exe` (Windows, VM ou PC d'un proche) et coller la clé : l'app doit s'ouvrir.
-   - Essayer la même clé sur un 2e ordinateur : elle doit être refusée (« déjà activée »).
-   - Libérer ensuite la clé avec la commande `decrease` (section « Commandes utiles »).
-   - Si possible, tester aussi un `.dmg` sur un vrai Mac : la version Mac n'a jamais été lancée sur un vrai Mac.
-7. **Payhip : déposer les fichiers** `revise.exe`, `revise-mac-arm64.dmg` et `revise-mac-intel.dmg`, puis **publier** le produit.
-8. **Codes gratuits.** Un code à 100 %, limité à 1 utilisation, pour chaque personne qui a **déjà** l'app (famille, amis). Leur envoyer **avant l'étape 9**.
-9. **Publier la Release** : à partir de là, les apps 0.9 proposent la mise à jour, qui demande une clé.
-   ```
-   ! cd ~/claudeCode/revise && git tag v1.0.0 && GIT_SSH_COMMAND="ssh -6" git push origin v1.0.0
-   ```
+Étapes 1 à 5 de la première version de ce fichier : faites le 18/11 (voir « Fait »).
+- Le secret se met dans un **terminal normal**, pas avec `!` : `cd ~/claudeCode/revise && gh secret set PAYHIP_SECRET`. Lancée avec `!`, la commande ne peut pas demander la valeur et enregistre un secret vide.
+- Construction sans Release : `GIT_SSH_COMMAND="ssh -6" git push origin master && gh workflow run release.yml --ref master`.
 
 ## Pièges connus
 
@@ -114,7 +122,7 @@ Mises à jour suivantes : changer la version, puis `git tag vX.Y.Z` et pousser c
 - Mises à jour : gratuites
 - Formats de cours : PDF, PowerPoint, Word
 
-**Texte après achat / mail de confirmation**
+**Texte après achat / mail de confirmation** (Payhip : champ du mail ou de la page de téléchargement, si présent)
 
 > **Merci pour ton achat !**
 >

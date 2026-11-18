@@ -6,7 +6,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 
 ## Publication en cours
 
-Mise en vente de la 1.0.0 sur Payhip pas terminée : suivre `PUBLICATION.md` (étapes, pièges, textes de la page).
+Mise en vente de la 1.0.0 sur Payhip pas terminée : suivre `PUBLICATION.md`, section « Reste à faire » (état au 18/11 17 h).
 
 ## Commandes
 
@@ -89,7 +89,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - `generate_cards(…, chat_pdf=None)` : un moteur qui sait regarder un PDF passe son `chat_pdf` ; les autres ne reçoivent que du texte.
 - Le build (`release.yml`) essaie pour de vrai la mise à jour automatique : `revise --install-from <fichier>` puis `--selftest` et `--cleanup-update`.
 - Build Mac puce Apple sur `macos-15` : `macos-latest` restait en file d'attente sans machine, `macos-14` est retiré
-  par GitHub. Un build relancé après publication fait échouer le job `publication` (la Release existe) : ajouter le
+  par GitHub. Même `macos-15` reste parfois en attente puis est annulé au bout de 15 min (17/11, 18/11) : `gh run rerun <id> --failed`. Un build relancé après publication fait échouer le job `publication` (la Release existe) : ajouter le
   fichier à la main avec `gh release upload vX.Y.Z <fichier>` (l'empreinte sha256 est publiée quand même).
 - Travail en arrière-plan dans l'interface : `common.Background` (file de messages vidée par une minuterie). Ne jamais émettre un signal Qt ni toucher un widget depuis un `threading.Thread` : plantage aléatoire à la fermeture (vu sur Windows et Mac).
 - Un fichier `.revise` vient d'un inconnu : ne jamais lui faire confiance (types, tailles) ; changer le format = incrémenter `share.FORMAT_VERSION`.
