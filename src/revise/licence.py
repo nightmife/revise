@@ -34,7 +34,7 @@ try:
 except ImportError:
     SECRET = ""
 
-BUY_URL = ""   # page de vente Payhip, ex. « https://payhip.com/b/AbCd »
+BUY_URL = "https://payhip.com/b/8XCQ2"   # page de vente Payhip, ex. « https://payhip.com/b/AbCd »
 API = "https://payhip.com/api/v2/license/"
 MAX_MACHINES = 1
 RECHECK_DAYS = 14
