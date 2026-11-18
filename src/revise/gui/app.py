@@ -22,6 +22,7 @@ from revise.gui.home_page import HomePage
 from revise.gui.courses import CoursesPage
 from revise.gui.import_page import ImportPage
 from revise.gui.learn_page import LearnPage
+from revise.gui.licence_dialog import ensure_licence, recheck_in_background
 from revise.gui.quiz_page import QuizPage
 from revise.gui.review import ReviewPage
 from revise.gui.stats_page import StatsPage
@@ -321,9 +322,12 @@ def main(db: Database | None = None) -> int:
     translator = QTranslator(app)  # textes de Qt lui-même (clic droit, fenêtre de choix de fichiers) en français
     if translator.load("qtbase_fr", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
         app.installTranslator(translator)
+    if not ensure_licence():
+        return 0
     win = MainWindow(db or Database())
     win.show()
     win.check_updates()
+    recheck_in_background(win)
     return app.exec()
 
 

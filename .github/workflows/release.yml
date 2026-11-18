@@ -20,6 +20,9 @@ jobs:
           python-version: "3.12"
       - name: Dépendances
         run: pip install ".[dev]" pyinstaller pillow
+      - name: Licence Gumroad renseignée (sinon l'application serait gratuite)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python -c "import sys; sys.path.insert(0, 'src'); from revise import licence; assert licence.PRODUCT_ID and licence.BUY_URL, 'PRODUCT_ID / BUY_URL vides dans src/revise/licence.py'"
       - name: Tests
         shell: pwsh
         run: |
@@ -72,6 +75,9 @@ jobs:
           python-version: "3.12"
       - name: Dépendances
         run: pip install ".[dev]" pyinstaller pillow
+      - name: Licence Gumroad renseignée (sinon l'application serait gratuite)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python -c "import sys; sys.path.insert(0, 'src'); from revise import licence; assert licence.PRODUCT_ID and licence.BUY_URL, 'PRODUCT_ID / BUY_URL vides dans src/revise/licence.py'"
       - name: Tests
         run: pytest -q
         env:

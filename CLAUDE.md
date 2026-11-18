@@ -7,7 +7,7 @@ Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (
 ## Commandes
 
 ```bash
-.venv/bin/pytest -q                              # tests (194), GUI en offscreen
+.venv/bin/pytest -q                              # tests (211), GUI en offscreen
 .venv/bin/revise                                 # ouvre l'appli
 .venv/bin/python packaging/revise_gui.py --selftest   # vérifie que la fenêtre se construit
 git tag vX.Y.Z && git push origin master vX.Y.Z  # GitHub Actions construit et publie revise.exe + les .dmg Mac
@@ -21,6 +21,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 |---|---|
 | `db.py` | SQLite : tables `decks`, `cards`, `reviews`, `quiz_answers` (QCM / examens blancs : `record_quiz_answer`, `set_quiz_answer`) ; classe `Database` ; migrations dans `_migrate` (`cards.distractors`, `cards.quiz_answer`, `decks.exam_date`, `decks.gen_version`) ; `answer_history` (résultats 1 / 0,5 / 0 par carte) ; `replace_deck_cards` (cours refait, progression gardée) ; `backup_to` / `restore_from` (sauvegarde vérifiée, copie de secours `avant-restauration.db`) |
 | `share.py` | partage : `export_courses` / `import_file` (fichier `.revise` = JSON, sans progression ni chemin personnel ; contenu reçu vérifié champ par champ), `export_anki` |
+| `licence.py` | clé Gumroad des exécutables (`required()` : figé + `PRODUCT_ID`, ou `REVISE_LICENCE=1`) : `activate` (vérif sans compter puis avec, `MAX_MACHINES`), réglage `licence` = clé + produit + `machine_id()` (haché) ; `due_key` / `remote_status` (fil) / `record` (interface) : revérif tous les `RECHECK_DAYS`, hors ligne = rien ne change ; fenêtre `gui/licence_dialog.py` (`ensure_licence` dans `gui.app.main()`) |
 | `updates.py` | `available_update()` → `Release` (version + fichiers avec empreinte sha256) : dernière Release GitHub comparée à `__version__` ; anonyme, erreurs ignorées ; réglage `check_updates` |
 | `selfupdate.py` | installation automatique (exécutables seulement, `app_target()`) : `download` vérifié → `--selftest` de la nouvelle version → `_swap` (ancienne gardée en `revise-ancien.exe` / `revise.app.ancien`, supprimée au lancement suivant) → `relaunch` ; `child_env()` retire les variables PyInstaller |
 | `documents.py` | texte des `.pptx`, `.docx`, `.txt`, `.md` (zip + XML, sans dépendance) ; appelé par `pdf.page_texts` selon l'extension |
@@ -80,7 +81,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - Avancement d'un moteur : `progress(Step(texte, fraction))` ; un téléchargement : `Step(…, phase="download")`.
 - Un test ne doit jamais dépendre de l'ordre des cartes d'une séance (aléatoire) : passer `rng=random.Random(graine)` à `Session`, ou raisonner sur la carte affichée.
 - Le nombre de nouvelles cartes par jour est un réglage mémorisé (`new_per_day` dans la config), lu par l'accueil et par « Mes cours ».
-- La vérification des mises à jour part de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
+- La licence (`ensure_licence`, `recheck_in_background`) et la vérification des mises à jour partent de `gui.app.main()`, jamais de `MainWindow.__init__` (tests et `--selftest` sans réseau).
 - `generate_cards(…, chat_pdf=None)` : un moteur qui sait regarder un PDF passe son `chat_pdf` ; les autres ne reçoivent que du texte.
 - Le build (`release.yml`) essaie pour de vrai la mise à jour automatique : `revise --install-from <fichier>` puis `--selftest` et `--cleanup-update`.
 - Build Mac puce Apple sur `macos-15` : `macos-latest` restait en file d'attente sans machine, `macos-14` est retiré
@@ -93,6 +94,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 - Boîtes de dialogue : `common.confirm` et `save_cancel_buttons` (boutons en français), pas `QMessageBox.question`.
 
 ## Non vérifié
+
+- Licence Gumroad : API essayée pour de vrai avec une fausse clé (404, `success: false`) ; jamais avec un vrai produit
+  ni sur un exécutable. `machine_id` sous Windows (registre) et Mac (`ioreg`) jamais lancé.
 
 - 0.9 : l'image des pages (`pypdfium2` 5.x) a tourné ici (PDF de cours, fenêtre hors écran) ; les exécutables
   (`--collect-all pypdfium2`) se construisent et démarrent sur les 3 builds, mais l'affichage d'une page n'y a jamais

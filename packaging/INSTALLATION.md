@@ -1,5 +1,7 @@
 **Tu as déjà revise ?** À partir de la version 0.6.0, un bouton « Nouvelle version » apparaît en bas à gauche de l'application et l'installe tout seul. Avant la 0.6.0, télécharge le fichier ci-dessous une dernière fois.
 
+**Clé de licence** : au premier lancement, revise demande la clé reçue par mail après l'achat sur Gumroad (Internet nécessaire une seule fois).
+
 ## Windows
 
 Télécharge **revise.exe** et lance-le. Rien d'autre à installer.
