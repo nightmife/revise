@@ -4,6 +4,10 @@ Appli de révision à partir de cours en PDF : cartes (répétition espacée FSR
 Public visé : n'importe qui (pas seulement des informaticiens) — textes de l'interface sans jargon.
 Python ≥ 3.11, Qt (PySide6), SQLite. Dépôt : `github.com/nightmife/revise` (public).
 
+## Publication en cours
+
+Mise en vente de la 1.0.0 sur Payhip pas terminée : suivre `PUBLICATION.md` (étapes, pièges, textes de la page).
+
 ## Commandes
 
 ```bash
@@ -59,7 +63,7 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 | `gui/page_dialog.py` | « Voir la page du cours » : image ou texte, zoom, « Retrouver le fichier… » (`relocate` → `set_deck_source`) |
 | `gui/render.py` | `show_markdown(view, texte)` : à utiliser pour tout texte de carte (formules + code coloré par pygments) |
 | `gui/*_page.py`, `review.py`, `courses.py`, `cards_dialog.py` | une page par fichier ; « Partager… » est dans `courses.py`, la réception d'un `.revise` dans `import_page.py` (`ImportWorker`, sans moteur) ; `common.py` (helpers, `ActionCard`, `confirm`, `step_header` pour les étapes numérotées, `Background`, `flow` / `FlowLayout` pour une rangée de boutons qui passe à la ligne), `theme.py` (palettes `DARK` / `LIGHT`, `apply(kind)` réécrit les couleurs du module et la QSS (`QSS_TEMPLATE`), `resolve(mode)`, icônes dessinées) ; `Eta` (temps restant) ; `import_page.py` : `find_courses` (recherche à toute profondeur, dossiers `scan_dirs()` = réglage `scan_dirs`, en arrière-plan), `ImportWorker.status(texte, avancement global, phase)` ; `courses.py` dessine la colonne « Maîtrise » avec `MasteryBar` |
-| `packaging/revise_gui.py` | point d'entrée des exécutables ; `make_icon.py` ; `INSTALLATION.md` = notes de la Release ; `.github/workflows/release.yml` : tests, PyInstaller (exe Windows, .dmg Mac arm64 + Intel), Release |
+| `packaging/revise_gui.py` | point d'entrée des exécutables ; `make_icon.py` ; `demo_db.py` (cours fictifs pour les captures) ; `INSTALLATION.md` = notes de la Release ; `.github/workflows/release.yml` : tests, PyInstaller (exe Windows, .dmg Mac arm64 + Intel), Release |
 
 ## Conventions
 

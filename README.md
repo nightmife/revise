@@ -169,6 +169,8 @@ d'où l'avertissement au premier lancement.
 
 ## Vente sur Payhip (clé de licence)
 
+Marche à suivre complète pour la première mise en vente : [PUBLICATION.md](PUBLICATION.md).
+
 `revise.exe` et les `.dmg` demandent une clé de licence au premier lancement (le code source lancé à la main, non :
 `REVISE_LICENCE=1 .venv/bin/revise` pour essayer la fenêtre). Les fichiers peuvent rester publics sur GitHub :
 sans clé, l'application ne s'ouvre pas.
