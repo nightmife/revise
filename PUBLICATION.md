@@ -19,7 +19,11 @@
   - **`revise-mac-arm64.dmg` (Mac puce Apple) manque.** Le job `macos-15` est resté en file d'attente chez GitHub et a été annulé au bout de 15 min. Il a été relancé (`gh run rerun 44338165088 --failed`).
 - Aucun tag `v1.0.0`, aucune Release 1.0.0 : les utilisateurs 0.9 ne voient rien.
 
-**Pas encore fait** : essai avec une vraie clé, dépôt des vrais fichiers sur Payhip, publication du produit, envoi des coupons, tag.
+**Fait le 18/11 au soir** :
+- 3 fichiers récupérés (le Mac puce Apple est passé à la 3e tentative). Payhip refuse `.exe` : ils sont envoyés en `.zip` (`revise-windows.zip`, `revise-mac-arm64.zip`, `revise-mac-intel.zip`), et la description comprend les étapes d'installation.
+- **Essai réel réussi sous Windows** : achat à 0 € avec un coupon, clé affichée après l'achat (pas dans le mail), activation, relance sans redemander la clé.
+
+**Pas encore fait** : vérifier que la clé apparaît sur la page de téléchargement du lien du mail, produit en Visible, envoi des coupons, tag.
 
 ## Reste à faire
 

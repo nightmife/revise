@@ -99,9 +99,9 @@ Version à changer à deux endroits : `pyproject.toml` et `src/revise/__init__.p
 
 ## Non vérifié
 
-- Licence Payhip : seule la réponse 401 d'un faux secret a été vue pour de vrai ; « réponse vide » pour une clé inconnue
-  (doc Payhip) jamais observée ; jamais essayée avec un vrai produit ni sur un exécutable. `machine_id` sous Windows
-  (registre) et Mac (`ioreg`) jamais lancé.
+- Licence Payhip : essayée pour de vrai le 18/11 sur `revise.exe` (Windows, build du run 44338165088) avec une clé achetée
+  à 0 € (coupon) : activation, puis relance sans redemander la clé. Pas encore vus pour de vrai : refus sur un 2e ordinateur,
+  « réponse vide » pour une clé inconnue, clé désactivée après remboursement, `machine_id` sur Mac (`ioreg`).
 
 - 0.9 : l'image des pages (`pypdfium2` 5.x) a tourné ici (PDF de cours, fenêtre hors écran) ; les exécutables
   (`--collect-all pypdfium2`) se construisent et démarrent sur les 3 builds, mais l'affichage d'une page n'y a jamais
