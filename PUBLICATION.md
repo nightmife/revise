@@ -21,9 +21,9 @@
 
 **Fait le 18/11 au soir** :
 - 3 fichiers récupérés (le Mac puce Apple est passé à la 3e tentative). Payhip refuse `.exe` : ils sont envoyés en `.zip` (`revise-windows.zip`, `revise-mac-arm64.zip`, `revise-mac-intel.zip`), et la description comprend les étapes d'installation.
-- **Essai réel réussi sous Windows** : achat à 0 € avec un coupon, clé affichée après l'achat (pas dans le mail), activation, relance sans redemander la clé.
+- **Essai réel réussi sous Windows** : achat à 0 € avec un coupon, clé affichée après l'achat et dans le mail de confirmation, activation, relance sans redemander la clé.
 
-**Pas encore fait** : vérifier que la clé apparaît sur la page de téléchargement du lien du mail, produit en Visible, envoi des coupons, tag.
+**Pas encore fait** : produit en Visible, envoi des coupons, tag.
 
 ## Reste à faire
 
