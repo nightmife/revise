@@ -1,10 +1,14 @@
-"""Clé de licence Gumroad des versions empaquetées (revise.exe, revise.app).
+"""Clé de licence Payhip des versions empaquetées (revise.exe, revise.app).
 
-Chaque achat sur Gumroad donne une clé unique. L'application la vérifie une fois en ligne (API publique
-`licenses/verify`, sans compte ni secret), puis la garde dans les réglages avec l'empreinte de l'ordinateur :
-elle marche ensuite hors ligne. Une clé s'active sur `MAX_MACHINES` ordinateurs au plus (compteur `uses` de
-Gumroad). Tous les `RECHECK_DAYS` jours, une vérification en arrière-plan retire la licence d'un achat
-remboursé ou contesté ; sans Internet, rien ne change.
+Chaque achat sur Payhip donne une clé unique. L'application la vérifie une fois en ligne (API v2 « license »),
+compte l'activation (`uses`), puis garde la clé dans les réglages avec l'empreinte de l'ordinateur : elle marche
+ensuite hors ligne. Une clé s'active sur `MAX_MACHINES` ordinateur(s). Tous les `RECHECK_DAYS` jours, une
+vérification en arrière-plan retire la licence d'un achat remboursé (Payhip désactive alors la clé) ; sans
+Internet, rien ne change.
+
+La clé secrète du produit Payhip n'est pas dans le dépôt : le build l'écrit dans `_licence_secret.py` (secret
+GitHub `PAYHIP_SECRET`). Elle reste lisible dans l'exécutable par quelqu'un de motivé ; elle ne permet que de
+manipuler une clé de licence qu'on connaît déjà (les clés des autres sont aléatoires).
 
 Lancée depuis le code source, l'application ne demande rien (sauf `REVISE_LICENCE=1`, pour essayer)."""
 
@@ -25,24 +29,31 @@ import uuid
 from revise import config, net
 from revise.models import ReviseError
 
-# À remplir une fois le produit créé sur Gumroad (voir README, « Vente sur Gumroad »).
-PRODUCT_ID = "w66guSGB6bEETnGkV5J2fg=="   # produit → Content → License key → product_id
-BUY_URL = "https://dylanbonn.gumroad.com/l/revise"      # page de vente, ex. « https://xxx.gumroad.com/l/revise »
+try:
+    from revise._licence_secret import SECRET   # écrit par le build, jamais commité
+except ImportError:
+    SECRET = ""
 
-VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify"
+BUY_URL = ""   # page de vente Payhip, ex. « https://payhip.com/b/AbCd »
+API = "https://payhip.com/api/v2/license/"
 MAX_MACHINES = 1
 RECHECK_DAYS = 14
 SETTING = "licence"
 
 
 class Unreachable(ReviseError):
-    """Gumroad injoignable (pas d'Internet, panne) : rien ne permet de dire si la clé est bonne ou non."""
+    """Payhip injoignable (pas d'Internet, panne) : rien ne permet de dire si la clé est bonne ou non."""
 
 
 def required() -> bool:
     if os.environ.get("REVISE_LICENCE") == "1":
         return True
-    return bool(getattr(sys, "frozen", False)) and bool(PRODUCT_ID)
+    return bool(getattr(sys, "frozen", False)) and bool(SECRET)
+
+
+def product_tag() -> str:
+    """Repère du produit gardé avec la clé (changer de produit oblige à réactiver), sans le secret lui-même."""
+    return hashlib.sha256(f"revise:{SECRET}".encode()).hexdigest()[:12]
 
 
 def machine_id() -> str:
@@ -75,6 +86,7 @@ def machine_id() -> str:
     return hashlib.sha256(f"revise:{raw}".encode()).hexdigest()[:32]
 
 
+
 def stored() -> dict | None:
     lic = config.load().get(SETTING)
     if not isinstance(lic, dict) or not isinstance(lic.get("key"), str) or not lic["key"]:
@@ -84,46 +96,41 @@ def stored() -> dict | None:
 
 def is_active() -> bool:
     lic = stored()
-    return bool(lic and lic.get("product") == PRODUCT_ID and lic.get("machine") == machine_id())
+    return bool(lic and lic.get("product") == product_tag() and lic.get("machine") == machine_id())
 
 
 def forget() -> None:
     config.save({SETTING: None})
 
 
-def _call(key: str, increment: bool, opener) -> dict:
-    body = urllib.parse.urlencode({"product_id": PRODUCT_ID, "license_key": key,
-                                   "increment_uses_count": "true" if increment else "false"}).encode()
-    req = urllib.request.Request(VERIFY_URL, data=body, method="POST",
-                                 headers={"User-Agent": "revise",
-                                          "Content-Type": "application/x-www-form-urlencoded"})
+def _call(action: str, key: str, opener) -> dict | None:
+    """Appel à l'API ; le contenu de « data », None si Payhip ne connaît pas la clé (réponse vide)."""
+    form = urllib.parse.urlencode({"license_key": key})
+    headers = {"User-Agent": "revise", "product-secret-key": SECRET}
+    if action == "verify":
+        req = urllib.request.Request(f"{API}verify?{form}", headers=headers, method="GET")
+    else:
+        req = urllib.request.Request(API + action, data=form.encode(), method="PUT",
+                                     headers={**headers, "Content-Type": "application/x-www-form-urlencoded"})
     try:
         with opener(req, timeout=15) as resp:
             raw = resp.read(1 << 16)
     except urllib.error.HTTPError as e:
-        if e.code not in (400, 404):   # clé inconnue : 404 avec {"success": false, …}
-            raise Unreachable(f"Gumroad ne répond pas correctement (erreur {e.code}). Réessaie dans un moment.")
-        raw = e.read(1 << 16)
+        if e.code in (400, 404):
+            return None
+        raise Unreachable(f"Payhip ne répond pas correctement (erreur {e.code}). Réessaie dans un moment.")
     except (OSError, ValueError) as e:  # URLError, délai dépassé, connexion coupée
-        raise Unreachable(f"Impossible de joindre Gumroad ({net.reason(e)}). Vérifie ta connexion à Internet.")
+        raise Unreachable(f"Impossible de joindre Payhip ({net.reason(e)}). Vérifie ta connexion à Internet.")
+    if not raw.strip():
+        return None
     try:
-        data = json.loads(raw.decode("utf-8"))
+        body = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise Unreachable("Réponse illisible de Gumroad. Réessaie dans un moment.")
-    if not isinstance(data, dict):
-        raise Unreachable("Réponse inattendue de Gumroad. Réessaie dans un moment.")
+        raise Unreachable("Réponse illisible de Payhip. Réessaie dans un moment.")
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, dict) or data.get("license_key") != key:
+        return None
     return data
-
-
-def _problem(data: dict) -> str | None:
-    """Pourquoi la clé ne vaut rien, None si elle est bonne."""
-    if data.get("success") is not True:
-        return "Cette clé n'existe pas. Copie-la telle quelle depuis le mail de Gumroad."
-    purchase = data.get("purchase")
-    purchase = purchase if isinstance(purchase, dict) else {}
-    if any(purchase.get(k) is True for k in ("refunded", "chargebacked", "disputed")):
-        return "Cet achat a été remboursé ou contesté : la clé ne marche plus."
-    return None
 
 
 def _uses(data: dict) -> int:
@@ -131,33 +138,43 @@ def _uses(data: dict) -> int:
     return uses if isinstance(uses, int) and not isinstance(uses, bool) else 0
 
 
+UNKNOWN = "Cette clé n'existe pas. Copie-la telle quelle depuis le mail de Payhip."
+DISABLED = "Cette clé a été désactivée (achat remboursé ?) : elle ne marche plus."
+
+
 def _too_many() -> str:
     where = "un autre ordinateur" if MAX_MACHINES == 1 else f"{MAX_MACHINES} ordinateurs"
     return (f"Cette clé est déjà activée sur {where}. Tu as changé d'ordinateur ou réinstallé ? "
-            "Contacte le vendeur depuis ta page d'achat Gumroad pour la libérer.")
+            "Réponds au mail de ton achat pour la faire libérer.")
 
 
 def activate(key: str, opener=net.urlopen, now=time.time) -> None:
-    """Vérifie la clé et l'enregistre pour cet ordinateur ; `ReviseError` (message à montrer) sinon."""
+    """Vérifie la clé, compte cet ordinateur et l'enregistre ; `ReviseError` (message à montrer) sinon."""
     key = key.strip()
     if not key:
         raise ReviseError("Colle ta clé de licence.")
-    if not PRODUCT_ID:
-        raise ReviseError("Cette version n'est pas reliée à une page de vente (PRODUCT_ID vide).")
+    if not SECRET:
+        raise ReviseError("Cette version n'est pas reliée à une page de vente (clé du produit absente).")
     lic = stored()
-    if lic and lic.get("key") == key and lic.get("product") == PRODUCT_ID and lic.get("machine") == machine_id():
+    if lic and lic.get("key") == key and is_active():
         return  # déjà activée ici : ne pas compter cet ordinateur deux fois
-    data = _call(key, False, opener)  # d'abord sans compter, pour ne pas user la clé sur un refus
-    if problem := _problem(data):
-        raise ReviseError(problem)
+    data = _call("verify", key, opener)
+    if data is None:
+        raise ReviseError(UNKNOWN)
+    if data.get("enabled") is not True:
+        raise ReviseError(DISABLED)
     if _uses(data) >= MAX_MACHINES:
         raise ReviseError(_too_many())
-    data = _call(key, True, opener)
-    if problem := _problem(data):
-        raise ReviseError(problem)
-    if _uses(data) > MAX_MACHINES:  # activée ailleurs entre les deux appels
+    data = _call("usage", key, opener)
+    if data is None:
+        raise Unreachable("Payhip n'a pas pu enregistrer l'activation. Réessaie dans un moment.")
+    if _uses(data) > MAX_MACHINES:  # activée ailleurs entre les deux appels : on rend l'activation
+        try:
+            _call("decrease", key, opener)
+        except Unreachable:
+            pass
         raise ReviseError(_too_many())
-    config.save({SETTING: {"key": key, "product": PRODUCT_ID, "machine": machine_id(), "checked": now()}})
+    config.save({SETTING: {"key": key, "product": product_tag(), "machine": machine_id(), "checked": now()}})
 
 
 def due_key(now=time.time) -> str | None:
@@ -172,13 +189,15 @@ def due_key(now=time.time) -> str | None:
 
 
 def remote_status(key: str, opener=net.urlopen) -> str:
-    """« ok », « revoked » (remboursée, contestée, supprimée) ou « unknown » (Gumroad injoignable).
-    Ne touche pas aux réglages : peut tourner dans un fil."""
+    """« ok », « revoked » (clé désactivée par Payhip, ex. remboursement) ou « unknown » (injoignable, réponse
+    vide). Une réponse vide ne retire jamais la licence : seul « enabled: false » le fait. Peut tourner dans un fil."""
     try:
-        data = _call(key, False, opener)
+        data = _call("verify", key, opener)
     except Unreachable:
         return "unknown"
-    return "revoked" if _problem(data) else "ok"
+    if data is None:
+        return "unknown"
+    return "ok" if data.get("enabled") is True else "revoked"
 
 
 def record(key: str, status: str, now=time.time) -> None:

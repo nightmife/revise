@@ -167,26 +167,23 @@ GitHub Actions lance les tests sous Windows et macOS, construit `revise.exe` et 
 (PyInstaller) et les publie dans une Release. Les applications ne sont pas signées (pas de compte développeur) :
 d'où l'avertissement au premier lancement.
 
-## Vente sur Gumroad (clé de licence)
+## Vente sur Payhip (clé de licence)
 
 `revise.exe` et les `.dmg` demandent une clé de licence au premier lancement (le code source lancé à la main, non :
 `REVISE_LICENCE=1 .venv/bin/revise` pour essayer la fenêtre). Les fichiers peuvent rester publics sur GitHub :
 sans clé, l'application ne s'ouvre pas.
 
-1. Gumroad → nouveau produit (« Digital product »), prix au choix.
-2. Dans le contenu du produit, ajouter le bloc **License key** (« Generate a unique license key per sale ») : il
-   affiche le `product_id`.
-3. Le recopier dans `src/revise/licence.py` (`PRODUCT_ID`), avec l'adresse de la page de vente (`BUY_URL`). Le build
-   d'une étiquette `v…` échoue tant qu'ils sont vides.
-4. Accès gratuits : Checkout → Discounts → code à **100 %**, quantité **1** (un code par personne).
+1. Payhip → nouveau produit numérique, prix au choix, case **« Generate unique license keys »** cochée.
+2. Une fois le produit créé, la **clé secrète du produit** apparaît sous cette case. Elle ne va jamais dans le dépôt :
+   `gh secret set PAYHIP_SECRET` (le build l'écrit dans `src/revise/_licence_secret.py`, ignoré par git).
+3. Adresse de la page de vente dans `src/revise/licence.py` (`BUY_URL`). Le build échoue si l'un des deux manque.
+4. Accès gratuits : code de réduction à **100 %**, limité à **1** utilisation (un code par personne).
 
-Une clé s'active sur 1 ordinateur (`MAX_MACHINES`) ; une clé remboursée ou contestée cesse de marcher
-(revérifiée tous les 14 jours quand il y a Internet). Rendre un ordinateur à quelqu'un (jeton d'accès Gumroad :
-Settings → Advanced → Applications) :
+Une clé s'active sur 1 ordinateur (`MAX_MACHINES`) ; Payhip désactive la clé d'un achat remboursé (revérifiée tous
+les 14 jours quand il y a Internet). Rendre un ordinateur à quelqu'un :
 
 ```bash
-curl -X PUT https://api.gumroad.com/v2/licenses/decrement_uses_count \
-  -d access_token=JETON -d product_id=PRODUCT_ID -d license_key=CLE
+curl -X PUT https://payhip.com/api/v2/license/decrease -d license_key=CLE --header "product-secret-key: SECRET"
 ```
 
 ## Tests

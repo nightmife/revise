@@ -1,4 +1,4 @@
-"""Clé de licence Gumroad, sans réseau (faux `opener`)."""
+"""Clé de licence Payhip, sans réseau (faux `opener`)."""
 
 import io
 import json
@@ -12,42 +12,50 @@ import pytest
 from revise import config, licence
 from revise.models import ReviseError
 
-KEY = "AAAA1111-BBBB2222-CCCC3333-DDDD4444"
+KEY = "WTKP4-66NL5-HMKQW-GFSCZ"
 
 
 @pytest.fixture(autouse=True)
 def product(monkeypatch):
-    monkeypatch.setattr(licence, "PRODUCT_ID", "prod123")
+    monkeypatch.setattr(licence, "SECRET", "secret123")
     monkeypatch.delenv("REVISE_LICENCE", raising=False)
 
 
-class Gumroad:
-    """Faux Gumroad : une clé connue, un compteur d'activations, un état d'achat."""
+class Payhip:
+    """Faux Payhip : une clé connue, un compteur d'activations, un état (activée / désactivée)."""
 
-    def __init__(self, uses=0, refunded=False, down=False):
-        self.uses, self.refunded, self.down = uses, refunded, down
+    def __init__(self, uses=0, enabled=True, down=False, race=0):
+        self.uses, self.enabled, self.down, self.race = uses, enabled, down, race
         self.calls = []
 
     def __call__(self, req, timeout):
         if self.down:
             raise urllib.error.URLError("pas de réseau")
-        form = dict(urllib.parse.parse_qsl(req.data.decode()))
-        self.calls.append(form)
-        assert req.full_url == licence.VERIFY_URL and form["product_id"] == "prod123"
-        if form["license_key"] != KEY:
-            body = json.dumps({"success": False, "message": "That license does not exist"}).encode()
-            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(body))
-        if form["increment_uses_count"] == "true":
-            self.uses += 1
-        return io.BytesIO(json.dumps({"success": True, "uses": self.uses,
-                                      "purchase": {"refunded": self.refunded, "chargebacked": False}}).encode())
+        assert req.get_header("Product-secret-key") == "secret123"
+        action = req.full_url.split("?")[0].rsplit("/", 1)[1]
+        if action == "verify":
+            assert req.get_method() == "GET" and req.data is None
+            key = dict(urllib.parse.parse_qsl(req.full_url.split("?", 1)[1]))["license_key"]
+        else:
+            assert req.get_method() == "PUT"
+            key = dict(urllib.parse.parse_qsl(req.data.decode()))["license_key"]
+        self.calls.append(action)
+        if key != KEY:
+            return io.BytesIO(b"")                       # « réponse vide » si la vérification échoue
+        if action == "usage":
+            self.uses += 1 + self.race
+        elif action == "decrease":
+            self.uses -= 1
+        return io.BytesIO(json.dumps({"data": {"enabled": self.enabled, "product_link": "AbCd",
+                                               "license_key": KEY, "buyer_email": "x@example.org",
+                                               "uses": self.uses, "date": "2026-11-18T10:00:00+00:00"}}).encode())
 
 
 def test_required_only_for_packaged_app(monkeypatch):
     assert not licence.required()                 # lancée depuis le code source
     monkeypatch.setattr("sys.frozen", True, raising=False)
     assert licence.required()
-    monkeypatch.setattr(licence, "PRODUCT_ID", "")
+    monkeypatch.setattr(licence, "SECRET", "")
     assert not licence.required()                 # pas encore reliée à Gumroad
     monkeypatch.setenv("REVISE_LICENCE", "1")
     assert licence.required()
@@ -59,34 +67,34 @@ def test_machine_id_is_stable_and_hashed():
 
 
 def test_activate_counts_one_machine_and_saves():
-    g = Gumroad()
+    g = Payhip()
     licence.activate(f"  {KEY}\n", opener=g)
     assert licence.is_active()
     assert g.uses == 1
-    assert [c["increment_uses_count"] for c in g.calls] == ["false", "true"]
+    assert g.calls == ["verify", "usage"]
     licence.activate(KEY, opener=g)               # même ordinateur : pas compté deux fois
     assert g.uses == 1
 
 
 def test_unknown_key_is_refused_without_saving():
     with pytest.raises(ReviseError, match="n'existe pas"):
-        licence.activate("FAUSSE", opener=Gumroad())
+        licence.activate("FAUSSE", opener=Payhip())
     assert not licence.is_active()
 
 
 def test_empty_key():
     with pytest.raises(ReviseError, match="Colle"):
-        licence.activate("   ", opener=Gumroad())
+        licence.activate("   ", opener=Payhip())
 
 
-def test_refunded_purchase_is_refused():
-    with pytest.raises(ReviseError, match="remboursé"):
-        licence.activate(KEY, opener=Gumroad(refunded=True))
+def test_disabled_key_is_refused():
+    with pytest.raises(ReviseError, match="désactivée"):
+        licence.activate(KEY, opener=Payhip(enabled=False))
     assert not licence.is_active()
 
 
 def test_too_many_machines_does_not_use_the_key():
-    g = Gumroad(uses=licence.MAX_MACHINES)
+    g = Payhip(uses=licence.MAX_MACHINES)
     with pytest.raises(ReviseError, match="déjà activée"):
         licence.activate(KEY, opener=g)
     assert g.uses == licence.MAX_MACHINES and len(g.calls) == 1
@@ -95,7 +103,7 @@ def test_too_many_machines_does_not_use_the_key():
 
 def test_offline_activation_explains():
     with pytest.raises(licence.Unreachable, match="connexion"):
-        licence.activate(KEY, opener=Gumroad(down=True))
+        licence.activate(KEY, opener=Payhip(down=True))
     assert not licence.is_active()
 
 
@@ -106,39 +114,61 @@ def test_server_error_is_not_taken_for_a_bad_key():
 
 
 def test_licence_copied_to_another_computer_is_not_active(monkeypatch):
-    licence.activate(KEY, opener=Gumroad())
+    licence.activate(KEY, opener=Payhip())
     monkeypatch.setattr(licence, "machine_id", lambda: "autre-ordinateur")
     assert not licence.is_active()
 
 
 def test_licence_of_another_product_is_not_active(monkeypatch):
-    licence.activate(KEY, opener=Gumroad())
-    monkeypatch.setattr(licence, "PRODUCT_ID", "autre")
+    licence.activate(KEY, opener=Payhip())
+    monkeypatch.setattr(licence, "SECRET", "autre")
     assert not licence.is_active()
 
 
 def test_recheck_schedule_and_results():
     now = time.time()
-    licence.activate(KEY, opener=Gumroad(), now=lambda: now)
+    licence.activate(KEY, opener=Payhip(), now=lambda: now)
     assert licence.due_key(now=lambda: now + 86400) is None
     later = now + (licence.RECHECK_DAYS + 1) * 86400
     assert licence.due_key(now=lambda: later) == KEY
 
-    assert licence.remote_status(KEY, Gumroad(down=True)) == "unknown"
+    assert licence.remote_status(KEY, Payhip(down=True)) == "unknown"
     licence.record(KEY, "unknown", now=lambda: later)
     assert licence.is_active() and licence.due_key(now=lambda: later) == KEY   # hors ligne : rien ne change
 
-    assert licence.remote_status(KEY, Gumroad()) == "ok"
+    assert licence.remote_status(KEY, Payhip()) == "ok"
     licence.record(KEY, "ok", now=lambda: later)
     assert licence.due_key(now=lambda: later) is None
 
-    assert licence.remote_status(KEY, Gumroad(refunded=True)) == "revoked"
+    assert licence.remote_status(KEY, Payhip(enabled=False)) == "revoked"
     licence.record(KEY, "revoked")
     assert not licence.is_active()
 
 
+def test_activation_race_gives_the_use_back():
+    g = Payhip(race=1)                                # activée ailleurs entre la vérification et le comptage
+    with pytest.raises(ReviseError, match="déjà activée"):
+        licence.activate(KEY, opener=g)
+    assert g.calls == ["verify", "usage", "decrease"] and g.uses == 1
+    assert not licence.is_active()
+
+
+def test_wrong_product_secret_is_not_a_bad_key():
+    def opener(req, timeout):
+        body = b'{"code":"authentication_fail","message":"failed to authenticate","success":false}'
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(body))
+    with pytest.raises(licence.Unreachable, match="erreur 401"):
+        licence.activate(KEY, opener=opener)
+    assert licence.remote_status(KEY, opener) == "unknown"
+
+
+def test_empty_answer_never_revokes():
+    licence.activate(KEY, opener=Payhip())
+    assert licence.remote_status(KEY, lambda req, timeout: io.BytesIO(b"")) == "unknown"
+
+
 def test_record_ignores_a_key_replaced_meanwhile():
-    licence.activate(KEY, opener=Gumroad())
+    licence.activate(KEY, opener=Payhip())
     licence.record("ANCIENNE", "revoked")
     assert licence.is_active()
 

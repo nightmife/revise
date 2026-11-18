@@ -1,4 +1,4 @@
-"""Fenêtre « Activer revise » (clé de licence Gumroad), et revérification de la licence en arrière-plan."""
+"""Fenêtre « Activer revise » (clé de licence Payhip), et revérification de la licence en arrière-plan."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class LicenceDialog(QDialog):
         t = QLabel("Activer revise")
         t.setObjectName("section")
         lay.addWidget(t)
-        lay.addWidget(muted("Colle la clé de licence reçue par mail après l'achat sur Gumroad. Il faut Internet "
+        lay.addWidget(muted("Colle la clé de licence reçue par mail après l'achat. Il faut Internet "
                             "pour l'activation, ensuite l'application marche aussi hors ligne."))
         self.key = QLineEdit()
         self.key.setPlaceholderText("XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX")
@@ -92,7 +92,7 @@ def ensure_licence(parent=None) -> bool:
 
 
 def recheck_in_background(parent: QObject, opener=None) -> None:
-    """Revérifie la licence auprès de Gumroad si c'est le moment ; le résultat compte au prochain lancement."""
+    """Revérifie la licence auprès de Payhip si c'est le moment ; le résultat compte au prochain lancement."""
     if not licence.required():
         return
     key = licence.due_key()
